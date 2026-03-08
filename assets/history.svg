@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="220" font-family="'JetBrains Mono','Fira Code','Cascadia Code',Menlo,monospace" font-size="12.5">
+  <rect width="680" height="220" rx="8" fill="#0d1117"/>
+
+  <!-- Terminal dots -->
+  <circle cx="20" cy="14" r="5" fill="#ff5f57"/>
+  <circle cx="36" cy="14" r="5" fill="#febc2e"/>
+  <circle cx="52" cy="14" r="5" fill="#28c840"/>
+  <text x="340" y="18" fill="#3fb950" font-size="11" font-weight="bold" text-anchor="middle">⚡ punkgo-jack</text>
+
+  <!-- Prompt -->
+  <text x="24" y="46" fill="#8b949e">$ <tspan fill="#e6edf3">punkgo-jack history</tspan></text>
+
+  <!-- Column positions: # x=24, Time x=56, Type x=114, Target x=198, Energy x=470, Receipt x=540 -->
+
+  <!-- Header row -->
+  <text x="24" y="72" fill="#484f58" font-size="11">#</text>
+  <text x="56" y="72" fill="#484f58" font-size="11">Time</text>
+  <text x="114" y="72" fill="#484f58" font-size="11">Type</text>
+  <text x="198" y="72" fill="#484f58" font-size="11">Target</text>
+  <text x="470" y="72" fill="#484f58" font-size="11">Energy</text>
+  <text x="556" y="72" fill="#484f58" font-size="11">Receipt</text>
+  <line x1="24" y1="78" x2="656" y2="78" stroke="#21262d"/>
+
+  <!-- Row 1 -->
+  <text x="24" y="96" fill="#6e7681" font-size="11">1</text>
+  <text x="56" y="96" fill="#8b949e" font-size="11">14:02</text>
+  <text x="114" y="96" fill="#d29922" font-size="11">exec</text>
+  <text x="198" y="96" fill="#e6edf3" font-size="11">bash:cargo test</text>
+  <text x="494" y="96" fill="#3fb950" font-size="11" text-anchor="end">26</text>
+  <text x="556" y="96" fill="#58a6ff" font-size="11">a1b2c3</text>
+
+  <!-- Row 2 -->
+  <text x="24" y="116" fill="#6e7681" font-size="11">2</text>
+  <text x="56" y="116" fill="#8b949e" font-size="11">14:03</text>
+  <text x="114" y="116" fill="#d29922" font-size="11">mutate</text>
+  <text x="198" y="116" fill="#e6edf3" font-size="11">edit:src/auth.rs</text>
+  <text x="494" y="116" fill="#3fb950" font-size="11" text-anchor="end">16</text>
+  <text x="556" y="116" fill="#58a6ff" font-size="11">d4e5f6</text>
+
+  <!-- Row 3 -->
+  <text x="24" y="136" fill="#6e7681" font-size="11">3</text>
+  <text x="56" y="136" fill="#8b949e" font-size="11">14:03</text>
+  <text x="114" y="136" fill="#8b949e" font-size="11">observe</text>
+  <text x="198" y="136" fill="#e6edf3" font-size="11">read:Cargo.toml</text>
+  <text x="494" y="136" fill="#3fb950" font-size="11" text-anchor="end">2</text>
+  <text x="556" y="136" fill="#58a6ff" font-size="11">g7h8i9</text>
+
+  <!-- Row 4 -->
+  <text x="24" y="156" fill="#6e7681" font-size="11">4</text>
+  <text x="56" y="156" fill="#8b949e" font-size="11">14:04</text>
+  <text x="114" y="156" fill="#d29922" font-size="11">create</text>
+  <text x="198" y="156" fill="#e6edf3" font-size="11">write:src/new.rs</text>
+  <text x="494" y="156" fill="#3fb950" font-size="11" text-anchor="end">11</text>
+  <text x="556" y="156" fill="#58a6ff" font-size="11">j0k1l2</text>
+
+  <!-- Row 5 -->
+  <text x="24" y="176" fill="#6e7681" font-size="11">5</text>
+  <text x="56" y="176" fill="#8b949e" font-size="11">14:05</text>
+  <text x="114" y="176" fill="#d29922" font-size="11">exec</text>
+  <text x="198" y="176" fill="#e6edf3" font-size="11">bash:git commit</text>
+  <text x="494" y="176" fill="#3fb950" font-size="11" text-anchor="end">26</text>
+  <text x="556" y="176" fill="#58a6ff" font-size="11">m3n4o5</text>
+
+  <!-- Summary line -->
+  <line x1="24" y1="186" x2="656" y2="186" stroke="#21262d"/>
+  <text x="24" y="206" fill="#484f58" font-size="11">47 events · session a1b2c3d4 · <tspan fill="#3fb950">⚡940</tspan></text>
+  <text x="656" y="206" fill="#484f58" font-size="10" text-anchor="end">every event has a Merkle receipt</text>
+</svg>

@@ -1,0 +1,7 @@
+target/
+state/
+local/
+*.log
+docs
+.claude
+debug-hook.*

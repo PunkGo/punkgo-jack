@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="460" font-family="'JetBrains Mono','Fira Code','Cascadia Code',Menlo,monospace" font-size="12.5">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="greenFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3fb950" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#3fb950" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="680" height="460" rx="8" fill="#0d1117"/>
+
+  <!-- Terminal dots -->
+  <circle cx="20" cy="14" r="5" fill="#ff5f57"/>
+  <circle cx="36" cy="14" r="5" fill="#febc2e"/>
+  <circle cx="52" cy="14" r="5" fill="#28c840"/>
+  <text x="340" y="18" fill="#3fb950" font-size="11" font-weight="bold" text-anchor="middle">⚡ punkgo-jack</text>
+
+  <!-- ==================== LEFT: Session events ==================== -->
+  <text x="24" y="50" fill="#8b949e" font-size="11" font-weight="bold">SESSION a1b2c3d4</text>
+  <text x="200" y="50" fill="#484f58" font-size="10">47 actions · 23m · ⚡940</text>
+
+  <!-- Event blocks (stacked, the highlighted one is #5) -->
+  <rect x="24" y="62" width="200" height="20" rx="3" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <text x="32" y="76" fill="#6e7681" font-size="10">#1  session_start</text>
+  <text x="190" y="76" fill="#484f58" font-size="9" text-anchor="end">14:00</text>
+
+  <rect x="24" y="84" width="200" height="20" rx="3" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <text x="32" y="98" fill="#6e7681" font-size="10">#2  read:Cargo.toml</text>
+  <text x="190" y="98" fill="#484f58" font-size="9" text-anchor="end">14:01</text>
+
+  <rect x="24" y="106" width="200" height="20" rx="3" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <text x="32" y="120" fill="#6e7681" font-size="10">#3  edit:src/main.rs</text>
+  <text x="190" y="120" fill="#484f58" font-size="9" text-anchor="end">14:02</text>
+
+  <rect x="24" y="128" width="200" height="20" rx="3" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <text x="32" y="142" fill="#6e7681" font-size="10">#4  edit:src/lib.rs</text>
+  <text x="190" y="142" fill="#484f58" font-size="9" text-anchor="end">14:02</text>
+
+  <!-- HIGHLIGHTED event -->
+  <rect x="24" y="150" width="200" height="22" rx="3" fill="#0a2d1f" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="32" y="165" fill="#3fb950" font-size="10" font-weight="bold">#5  bash:cargo test</text>
+  <text x="190" y="165" fill="#3fb950" font-size="9" text-anchor="end">14:03</text>
+
+  <rect x="24" y="174" width="200" height="20" rx="3" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <text x="32" y="188" fill="#6e7681" font-size="10">#6  write:README.md</text>
+  <text x="190" y="188" fill="#484f58" font-size="9" text-anchor="end">14:05</text>
+
+  <rect x="24" y="196" width="200" height="20" rx="3" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <text x="32" y="210" fill="#6e7681" font-size="10">#7  bash:git commit</text>
+  <text x="190" y="210" fill="#484f58" font-size="9" text-anchor="end">14:06</text>
+
+  <!-- dots for more -->
+  <text x="124" y="234" fill="#484f58" font-size="11" text-anchor="middle">···  40 more  ···</text>
+
+  <!-- ==================== RIGHT: Merkle tree ==================== -->
+  <!-- Tree background glow -->
+  <rect x="360" y="55" width="290" height="190" rx="6" fill="url(#greenFade)"/>
+
+  <!-- Tree label -->
+  <text x="505" y="50" fill="#8b949e" font-size="11" font-weight="bold" text-anchor="middle">MERKLE TREE</text>
+
+  <!-- Root node (green, glowing) -->
+  <circle cx="505" cy="82" r="14" fill="#0d1117" stroke="#3fb950" stroke-width="2" filter="url(#glow)"/>
+  <text x="505" y="86" fill="#3fb950" font-size="9" text-anchor="middle" font-weight="bold">root</text>
+
+  <!-- Level 1 -->
+  <line x1="493" y1="96" x2="445" y2="118" stroke="#21262d" stroke-width="1.5"/>
+  <line x1="517" y1="96" x2="565" y2="118" stroke="#3fb950" stroke-width="1.5"/>
+
+  <circle cx="445" cy="126" r="10" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+  <text x="445" y="130" fill="#d29922" font-size="8" text-anchor="middle">h₁</text>
+
+  <circle cx="565" cy="126" r="10" fill="#0d1117" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="565" y="130" fill="#3fb950" font-size="8" text-anchor="middle">h₂</text>
+
+  <!-- Level 2 -->
+  <line x1="439" y1="136" x2="410" y2="158" stroke="#21262d" stroke-width="1"/>
+  <line x1="451" y1="136" x2="480" y2="158" stroke="#21262d" stroke-width="1"/>
+  <line x1="559" y1="136" x2="530" y2="158" stroke="#3fb950" stroke-width="1.5"/>
+  <line x1="571" y1="136" x2="600" y2="158" stroke="#21262d" stroke-width="1"/>
+
+  <circle cx="410" cy="166" r="8" fill="#0d1117" stroke="#21262d" stroke-width="1"/>
+  <circle cx="480" cy="166" r="8" fill="#0d1117" stroke="#21262d" stroke-width="1"/>
+  <circle cx="530" cy="166" r="8" fill="#0d1117" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="530" y="170" fill="#3fb950" font-size="7" text-anchor="middle">h₃</text>
+  <circle cx="600" cy="166" r="8" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+  <text x="600" y="170" fill="#d29922" font-size="7" text-anchor="middle">h₄</text>
+
+  <!-- Leaves -->
+  <line x1="406" y1="174" x2="393" y2="192" stroke="#21262d" stroke-width="1"/>
+  <line x1="414" y1="174" x2="427" y2="192" stroke="#21262d" stroke-width="1"/>
+  <line x1="476" y1="174" x2="463" y2="192" stroke="#21262d" stroke-width="1"/>
+  <line x1="484" y1="174" x2="497" y2="192" stroke="#21262d" stroke-width="1"/>
+  <line x1="526" y1="174" x2="513" y2="192" stroke="#3fb950" stroke-width="1.5"/>
+  <line x1="534" y1="174" x2="547" y2="192" stroke="#d29922" stroke-width="1"/>
+  <line x1="596" y1="174" x2="583" y2="192" stroke="#21262d" stroke-width="1"/>
+  <line x1="604" y1="174" x2="617" y2="192" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Leaf nodes -->
+  <rect x="386" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <rect x="420" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <rect x="456" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <rect x="490" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <!-- THE event leaf — highlighted green -->
+  <rect x="506" y="195" width="14" height="14" rx="2" fill="#0a2d1f" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="513" y="205" fill="#3fb950" font-size="7" text-anchor="middle">#5</text>
+  <rect x="540" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <rect x="576" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+  <rect x="610" y="195" width="14" height="14" rx="2" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Connection line: event #5 to tree leaf -->
+  <line x1="224" y1="161" x2="506" y2="202" stroke="#3fb950" stroke-width="1" stroke-dasharray="4,3" opacity="0.6"/>
+
+  <!-- Proof legend -->
+  <circle cx="380" cy="234" r="5" fill="#0d1117" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="390" y="238" fill="#8b949e" font-size="9">verification path</text>
+
+  <circle cx="490" cy="234" r="5" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+  <text x="500" y="238" fill="#8b949e" font-size="9">proof hashes (provided)</text>
+
+  <!-- ==================== BOTTOM: Visual proof ==================== -->
+  <line x1="24" y1="255" x2="656" y2="255" stroke="#21262d"/>
+
+  <!-- LEFT: Inclusion — proof stream flowing down from tree -->
+  <text x="24" y="282" fill="#8b949e" font-size="11" font-weight="bold">INCLUSION</text>
+
+  <!-- The stream: green flows down from tree leaf -->
+  <line x1="513" y1="210" x2="200" y2="310" stroke="#3fb950" stroke-width="2" opacity="0.3"/>
+
+  <!-- Stream node 1: leaf hash -->
+  <circle cx="70" cy="330" r="16" fill="#0a2d1f" stroke="#3fb950" stroke-width="2"/>
+  <text x="70" y="335" fill="#3fb950" font-size="10" text-anchor="middle" font-weight="bold">#5</text>
+
+  <!-- Amber merge 1 -->
+  <line x1="86" y1="330" x2="120" y2="330" stroke="#3fb950" stroke-width="2"/>
+  <circle cx="106" cy="308" r="10" fill="#1a1600" stroke="#d29922" stroke-width="1.5"/>
+  <text x="106" y="312" fill="#d29922" font-size="8" text-anchor="middle">h₄</text>
+  <line x1="106" y1="318" x2="120" y2="330" stroke="#d29922" stroke-width="1.5" stroke-dasharray="3,2"/>
+
+  <!-- Combined node 1 -->
+  <circle cx="134" cy="330" r="12" fill="#0a2d1f" stroke="#3fb950" stroke-width="1.5"/>
+
+  <!-- Flow continues -->
+  <line x1="146" y1="330" x2="186" y2="330" stroke="#3fb950" stroke-width="2"/>
+
+  <!-- Amber merge 2 -->
+  <circle cx="168" cy="308" r="10" fill="#1a1600" stroke="#d29922" stroke-width="1.5"/>
+  <text x="168" y="312" fill="#d29922" font-size="8" text-anchor="middle">h₁</text>
+  <line x1="168" y1="318" x2="186" y2="330" stroke="#d29922" stroke-width="1.5" stroke-dasharray="3,2"/>
+
+  <!-- Combined node 2 = computed root -->
+  <circle cx="200" cy="330" r="12" fill="#0a2d1f" stroke="#3fb950" stroke-width="1.5"/>
+
+  <!-- Flow to final comparison -->
+  <line x1="212" y1="330" x2="244" y2="330" stroke="#3fb950" stroke-width="2"/>
+
+  <!-- Equals / match -->
+  <text x="256" y="335" fill="#484f58" font-size="14">=</text>
+
+  <!-- Known root -->
+  <circle cx="286" cy="330" r="16" fill="#0d1117" stroke="#3fb950" stroke-width="2" filter="url(#glow)"/>
+  <text x="286" y="335" fill="#3fb950" font-size="9" text-anchor="middle" font-weight="bold">root</text>
+
+  <!-- BIG checkmark -->
+  <text x="316" y="338" fill="#3fb950" font-size="22" font-weight="bold" filter="url(#glow)">✓</text>
+
+  <text x="24" y="370" fill="#6e7681" font-size="10">2 hashes prove 1 event in a tree of 47</text>
+
+  <!-- RIGHT: Append-only — two tree silhouettes -->
+  <text x="420" y="282" fill="#8b949e" font-size="11" font-weight="bold">APPEND-ONLY</text>
+
+  <!-- Small tree (session start: 12 events) — scaled up -->
+  <!-- trunk -->
+  <line x1="468" y1="366" x2="468" y2="340" stroke="#d29922" stroke-width="2"/>
+  <!-- branches level 1 -->
+  <line x1="468" y1="340" x2="448" y2="320" stroke="#d29922" stroke-width="1.5"/>
+  <line x1="468" y1="340" x2="488" y2="320" stroke="#d29922" stroke-width="1.5"/>
+  <!-- branches level 2 -->
+  <line x1="448" y1="320" x2="438" y2="308" stroke="#d29922" stroke-width="1.2"/>
+  <line x1="448" y1="320" x2="458" y2="308" stroke="#d29922" stroke-width="1.2"/>
+  <line x1="488" y1="320" x2="478" y2="308" stroke="#d29922" stroke-width="1.2"/>
+  <line x1="488" y1="320" x2="498" y2="308" stroke="#d29922" stroke-width="1.2"/>
+  <text x="468" y="382" fill="#d29922" font-size="10" text-anchor="middle">12</text>
+
+  <!-- Arrow between trees -->
+  <line x1="510" y1="340" x2="554" y2="340" stroke="#484f58" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <polygon points="554,336 562,340 554,344" fill="#484f58"/>
+  <text x="536" y="330" fill="#484f58" font-size="9" text-anchor="middle">+35</text>
+
+  <!-- Big tree (session end: 47 events) — scaled up -->
+  <!-- trunk -->
+  <line x1="600" y1="366" x2="600" y2="332" stroke="#3fb950" stroke-width="2.5"/>
+  <!-- branches level 1 -->
+  <line x1="600" y1="332" x2="572" y2="312" stroke="#3fb950" stroke-width="2"/>
+  <line x1="600" y1="332" x2="628" y2="312" stroke="#3fb950" stroke-width="2"/>
+  <!-- branches level 2 -->
+  <line x1="572" y1="312" x2="558" y2="298" stroke="#3fb950" stroke-width="1.5"/>
+  <line x1="572" y1="312" x2="586" y2="298" stroke="#3fb950" stroke-width="1.5"/>
+  <line x1="628" y1="312" x2="614" y2="298" stroke="#3fb950" stroke-width="1.5"/>
+  <line x1="628" y1="312" x2="642" y2="298" stroke="#3fb950" stroke-width="1.5"/>
+  <!-- branches level 3 -->
+  <line x1="558" y1="298" x2="552" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="558" y1="298" x2="564" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="586" y1="298" x2="580" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="586" y1="298" x2="592" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="614" y1="298" x2="608" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="614" y1="298" x2="620" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="642" y1="298" x2="636" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <line x1="642" y1="298" x2="648" y2="290" stroke="#3fb950" stroke-width="1"/>
+  <text x="600" y="382" fill="#3fb950" font-size="10" text-anchor="middle">47</text>
+
+  <!-- BIG checkmark for append-only -->
+  <text x="656" y="342" fill="#3fb950" font-size="22" font-weight="bold" filter="url(#glow)">✓</text>
+
+  <text x="420" y="400" fill="#6e7681" font-size="10">tree only grew — no rewrites, no deletions</text>
+
+  <!-- Bottom tagline -->
+  <text x="340" y="440" fill="#484f58" font-size="10" text-anchor="middle">No trust required. Just math. — RFC 6962 compatible</text>
+</svg>
