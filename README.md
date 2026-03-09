@@ -8,9 +8,9 @@
   <img src="https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/assets/presence.svg" alt="PunkGo presence heatmap — 7 days of AI agent activity" width="680">
 </p>
 
-Your agent did 200 things last session. Something broke. Can you prove what happened?
+Your AI agent just deleted your production database. Your project folder. Your `.env`. It happens every week on social media — and nobody can prove exactly what went wrong, because the session is already gone.
 
-- **Post-incident forensics** — "which agent edited that config at 3am?" Seconds, not hours.
+- **Post-incident forensics** — "which agent deleted that file at 3am?" Seconds, not hours.
 - **Accountability that survives** — Terminal closed? Session compressed? The log doesn't care.
 - **Trust but verify** — You approve actions. PunkGo proves what actually happened. Different things.
 - **Energy awareness** — See what your agents cost. Per action, per session, per day.
@@ -63,7 +63,7 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 
 | Agent | Status | Integration |
 |-------|--------|-------------|
-| **Claude Code** | Supported | 6 hooks — zero friction, fully automatic |
+| **Claude Code** (Terminal + VSCode) | Supported | 6 hooks — zero friction, fully automatic |
 | **Custom agents** | Via MCP | Use `punkgo_log` tool directly |
 | Cursor, Windsurf, Aider | Planned | — |
 
