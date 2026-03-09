@@ -4,4 +4,4 @@ local/
 *.log
 docs
 .claude
-debug-hook.*
+debug-hook.*campaigns/
