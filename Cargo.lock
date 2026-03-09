@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "punkgo-jack"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1099,6 +1099,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tempfile",
+ "tlog_tiles",
  "tokio",
  "tracing",
  "tracing-subscriber",

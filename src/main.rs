@@ -14,6 +14,8 @@ mod session;
 mod setup;
 mod spillover;
 mod tools;
+mod upgrade;
+mod verify;
 
 use std::env;
 
@@ -47,6 +49,8 @@ fn print_usage() {
          \x20 report [SESSION_ID]     Generate turn-based session report\n\
          \x20 presence [DAYS]         Show collaboration heatmap (default: 14 days)\n\
          \x20 statusline on|off       Toggle energy display in Claude Code statusline\n\
+         \x20 verify <EVENT_ID>       Verify Merkle inclusion proof offline\n\
+         \x20 upgrade                 Check for updates and upgrade\n\
          \x20 flush                   Replay spillover events to kernel\n\
          \x20 rebuild-audit           Rebuild Merkle tree from event hashes\n\
          \x20 help                    Show this message\n\
@@ -77,6 +81,11 @@ fn main() {
     let mut args = env::args().skip(1);
     let cmd = args.next().unwrap_or_else(|| "serve".to_string());
 
+    if cmd == "--version" || cmd == "-V" || cmd == "version" {
+        println!("punkgo-jack {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let result = match cmd.as_str() {
         "serve" => run_serve(),
         "ingest" => run_ingest(&mut args),
@@ -88,6 +97,8 @@ fn main() {
         "report" => run_report(&mut args),
         "presence" => run_presence(&mut args),
         "statusline" => run_statusline(&mut args),
+        "verify" => run_verify(&mut args),
+        "upgrade" => upgrade::run_upgrade(),
         "flush" => spillover::flush(),
         #[cfg(feature = "rebuild-audit")]
         "rebuild-audit" => run_rebuild_audit(&mut args),
@@ -179,6 +190,11 @@ fn run_statusline(args: &mut impl Iterator<Item = String>) -> Result<()> {
         "off" => setup::toggle_statusline(false),
         other => anyhow::bail!("unknown statusline option: {other} (expected on|off)"),
     }
+}
+
+fn run_verify(args: &mut impl Iterator<Item = String>) -> Result<()> {
+    let parsed = verify::parse_args(args)?;
+    verify::run_verify(parsed)
 }
 
 #[cfg(feature = "rebuild-audit")]

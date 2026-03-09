@@ -1,6 +1,6 @@
 [package]
 name = "punkgo-jack"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Local adapter for punkgo-kernel — cryptographic audit trails for AI agent tool calls"
 license = "MIT"
@@ -26,6 +26,7 @@ uuid = { version = "1", features = ["v4"] }
 rmcp = { version = "0.16.0", features = ["server", "transport-io"] }
 interprocess = "2.4"
 sha2 = "0.10"
+tlog_tiles = "0.2.0"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"], optional = true }
 
 [dev-dependencies]

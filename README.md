@@ -31,6 +31,8 @@ punkgo-jack setup claude-code
 # That's it. Your next Claude Code session is already being recorded.
 ```
 
+**Upgrade**: `punkgo-jack upgrade` — auto-detects cargo or install script, no re-setup needed.
+
 ## Record
 
 <p align="center">
@@ -47,7 +49,7 @@ Every event gets a hash. Every hash gets appended to a Merkle tree. The tree is 
 
 `show` verifies any event's [RFC 6962](https://datatracker.ietf.org/doc/html/rfc6962) Merkle inclusion proof. `receipt` checks that the tree grew append-only during your session. No trust required, just math.
 
-**Hand this to an auditor.** The checkpoint format follows [C2SP signed-note](https://c2sp.org/signed-note) — the same spec behind Go's `sum.golang.org` and Sigstore's Rekor. Export and verify with any RFC 6962 tool:
+**Hand this to an auditor.** The checkpoint format follows [C2SP tlog-checkpoint](https://c2sp.org/tlog-checkpoint) — the same structure behind Go's `sum.golang.org` and Sigstore's Rekor. Export and verify with any RFC 6962 tool:
 
 ```bash
 # C2SP checkpoint (portable, standard)
@@ -55,9 +57,25 @@ $ punkgo-jack show --checkpoint
 
 # Raw proof hashes (feed to any RFC 6962 verifier)
 $ punkgo-jack show a1b2c3 --json | jq '.proof'
+
+# Offline verification — no daemon needed
+$ punkgo-jack verify a1b2c3
+$ punkgo-jack verify --file proof.json
 ```
 
+**Cross-language verification.** PunkGo proofs are not proprietary — verify with Go's standard `sumdb/tlog` library:
+
+```bash
+$ punkgo-jack show a1b2c3 --json > proof.json
+$ cd examples/verify-go && go run main.go proof.json
+Inclusion:  VERIFIED -- leaf is in the tree, root matches checkpoint
+```
+
+See [`examples/verify-go/`](examples/verify-go/) for the full cross-verification example.
+
 How the proof works under the hood → [punkgo-kernel audit trail](https://github.com/PunkGo/punkgo-kernel#audit-trail)
+
+> **Trust model**: Checkpoints are currently unsigned. The Merkle tree guarantees append-only integrity and inclusion proofs are independently verifiable, but checkpoint authenticity relies on local trust. Signed checkpoints are planned for multi-party scenarios.
 
 ## Supported Agents
 
@@ -90,11 +108,14 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 | `unsetup claude-code [--purge]` | Remove hooks. `--purge` also clears local state |
 | `history [--actor ID]` | Recent events in a table |
 | `show <EVENT_ID>` | Full event details + Merkle inclusion proof |
+| `verify <EVENT_ID>` | Offline Merkle proof verification |
+| `verify --file proof.json` | Fully offline verification from exported JSON |
 | `receipt [SESSION]` | Session receipt with consistency proof |
 | `report [SESSION]` | Turn-based session report |
 | `presence [DAYS]` | Energy heatmap (default: 14 days) |
 | `statusline on\|off` | Toggle energy display in Claude Code statusline |
 | `serve` | Start MCP server (7 tools for agent self-query) |
+| `upgrade` | Check for updates and self-upgrade |
 | `flush` | Replay buffered events to kernel |
 
 ## MCP Tools (Agent Self-Query)

@@ -1,0 +1,20 @@
+{
+  "checkpoint": {
+    "root_hash": "89510356aee80cb3cfd9547f1df98d96f25b5d74dc1f9a6f1998531014e70109"
+  },
+  "event": {
+    "event_hash": "8f1593cb92f429d9340b9bbc1f0bb122adf8026c42a4a42142e2168931727236",
+    "id": "cross-verify-test-005",
+    "log_index": 5
+  },
+  "proof": {
+    "proof": [
+      "ea9fc1a1b6e191b460d0d6306e3e870c173f39330f13cda1b70cfc72bdc398ba",
+      "398ebdeb46e179eeffacef4635fd30410954e169b88e22741fa96cffb1022a85",
+      "bdd1c5ff55b19cb6b0e7c761bf9a6ccaa27fbbfc07b74f1fabb6e911a0bd2ab3",
+      "0987e0642e1f474f9559a891878d4c9afa846570074aa8a433cd30338a80b746",
+      "cfb05ec3f364c881746add738447a3357ad9ccd369153e6fd3665a5a3963b9ef"
+    ],
+    "tree_size": 20
+  }
+}

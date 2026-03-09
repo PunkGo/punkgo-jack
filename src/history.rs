@@ -15,7 +15,9 @@ pub struct HistoryArgs {
 /// Parsed CLI arguments for `punkgo-jack show`.
 #[derive(Debug)]
 pub struct ShowArgs {
-    pub event_id: String,
+    pub event_id: Option<String>,
+    pub json: bool,
+    pub checkpoint: bool,
 }
 
 /// Parsed CLI arguments for `punkgo-jack receipt`.
@@ -145,6 +147,34 @@ pub fn run_history(args: HistoryArgs) -> Result<()> {
 pub fn run_show(args: ShowArgs) -> Result<()> {
     let client = IpcClient::from_env(None);
 
+    // --checkpoint mode: print C2SP checkpoint text and exit.
+    if args.checkpoint {
+        let cp_req = RequestEnvelope {
+            request_id: new_request_id(),
+            request_type: RequestType::Read,
+            payload: json!({ "kind": "audit_checkpoint" }),
+        };
+        let cp_resp = client.send(&cp_req)?;
+        if cp_resp.status != "ok" {
+            let msg = cp_resp
+                .payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            bail!("failed to get checkpoint: {msg}");
+        }
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&cp_resp.payload)?);
+        } else if let Some(text) = cp_resp.payload.get("checkpoint_text").and_then(Value::as_str) {
+            print!("{text}");
+        } else {
+            println!("{}", serde_json::to_string_pretty(&cp_resp.payload)?);
+        }
+        return Ok(());
+    }
+
+    let needle = args.event_id.as_deref().unwrap();
+
     // Fetch recent events and find the one matching the event_id (prefix match).
     let req = RequestEnvelope {
         request_id: new_request_id(),
@@ -168,7 +198,6 @@ pub fn run_show(args: ShowArgs) -> Result<()> {
         .cloned()
         .unwrap_or_default();
 
-    let needle = &args.event_id;
     let event = events
         .iter()
         .find(|e| {
@@ -178,6 +207,34 @@ pub fn run_show(args: ShowArgs) -> Result<()> {
         })
         .ok_or_else(|| anyhow::anyhow!("no event found matching '{needle}'"))?;
 
+    // Fetch Merkle proof for this event.
+    let log_index = event.get("log_index").and_then(Value::as_u64);
+    let proof_data = log_index.and_then(|idx| {
+        let proof_req = RequestEnvelope {
+            request_id: new_request_id(),
+            request_type: RequestType::Read,
+            payload: json!({ "kind": "audit_inclusion_proof", "log_index": idx }),
+        };
+        client.send(&proof_req).ok().and_then(|r| {
+            if r.status == "ok" {
+                Some(r.payload)
+            } else {
+                None
+            }
+        })
+    });
+
+    // --json mode: output structured JSON with event + proof.
+    if args.json {
+        let mut output = event.clone();
+        if let Some(proof) = &proof_data {
+            output["proof"] = proof.clone();
+        }
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    // Human-readable output.
     let event_id = event.get("id").and_then(Value::as_str).unwrap_or("unknown");
     let action_type = event
         .get("action_type")
@@ -200,7 +257,6 @@ pub fn run_show(args: ShowArgs) -> Result<()> {
         .get("settled_energy")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let log_index = event.get("log_index").and_then(Value::as_u64);
 
     let event_type = event
         .get("payload")
@@ -226,39 +282,18 @@ pub fn run_show(args: ShowArgs) -> Result<()> {
     if let Some(idx) = log_index {
         println!("Merkle:   log_index={idx}");
 
-        let proof_req = RequestEnvelope {
-            request_id: new_request_id(),
-            request_type: RequestType::Read,
-            payload: json!({ "kind": "audit_inclusion_proof", "log_index": idx }),
-        };
-        match client.send(&proof_req) {
-            Ok(proof_resp) if proof_resp.status == "ok" => {
-                let tree_size = proof_resp
-                    .payload
-                    .get("tree_size")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let proof_hashes = proof_resp
-                    .payload
-                    .get("proof")
-                    .and_then(Value::as_array)
-                    .map(|a| a.len())
-                    .unwrap_or(0);
-                println!(
-                    "Proof:    \u{2713} inclusion verified (tree_size={tree_size}, proof_hashes={proof_hashes})"
-                );
-            }
-            Ok(proof_resp) => {
-                let msg = proof_resp
-                    .payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown error");
-                println!("Proof:    \u{2717} verification failed: {msg}");
-            }
-            Err(e) => {
-                println!("Proof:    \u{2717} could not verify: {e}");
-            }
+        if let Some(proof) = &proof_data {
+            let tree_size = proof.get("tree_size").and_then(Value::as_u64).unwrap_or(0);
+            let proof_hashes = proof
+                .get("proof")
+                .and_then(Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
+            println!(
+                "Proof:    \u{2713} inclusion verified (tree_size={tree_size}, proof_hashes={proof_hashes})"
+            );
+        } else {
+            println!("Proof:    \u{2717} could not verify inclusion");
         }
     }
 
@@ -470,8 +505,28 @@ pub fn parse_history_args(args: &mut impl Iterator<Item = String>) -> Result<His
 }
 
 pub fn parse_show_args(args: &mut impl Iterator<Item = String>) -> Result<ShowArgs> {
-    let event_id = args.next().context("usage: punkgo-jack show <event_id>")?;
-    Ok(ShowArgs { event_id })
+    let mut event_id = None;
+    let mut json = false;
+    let mut checkpoint = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--checkpoint" => checkpoint = true,
+            _ if event_id.is_none() => event_id = Some(arg),
+            other => bail!("unknown show option: {other}"),
+        }
+    }
+
+    if !checkpoint && event_id.is_none() {
+        bail!("usage: punkgo-jack show <event_id> [--json] or punkgo-jack show --checkpoint");
+    }
+
+    Ok(ShowArgs {
+        event_id,
+        json,
+        checkpoint,
+    })
 }
 
 pub fn parse_receipt_args(args: &mut impl Iterator<Item = String>) -> Result<ReceiptArgs> {
