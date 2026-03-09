@@ -107,7 +107,8 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 | `setup claude-code` | Install hooks + statusline + kernel detection |
 | `unsetup claude-code [--purge]` | Remove hooks. `--purge` also clears local state |
 | `history [--actor ID]` | Recent events in a table |
-| `show <EVENT_ID>` | Full event details + Merkle inclusion proof |
+| `show <EVENT_ID> [--json]` | Full event details + Merkle inclusion proof |
+| `show --checkpoint` | Print C2SP tlog-checkpoint |
 | `verify <EVENT_ID>` | Offline Merkle proof verification |
 | `verify --file proof.json` | Fully offline verification from exported JSON |
 | `receipt [SESSION]` | Session receipt with consistency proof |
