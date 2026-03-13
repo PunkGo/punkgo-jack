@@ -338,15 +338,15 @@ fn try_seed_actor(actor_id: &str) {
                 "actor_id": actor_id,
                 "actor_type": "agent",
                 "purpose": "claude-code-adapter",
-                "energy_balance": 10000,
-                "energy_share": 0.1
+                "energy_balance": 100_000,
+                "energy_share": 50.0
             }
         }),
     };
 
     match client.send(&req) {
         Ok(resp) if resp.status == "ok" => {
-            eprintln!("actor '{actor_id}' seeded (energy=10000)");
+            eprintln!("actor '{actor_id}' seeded (energy=100000, share=50.0)");
         }
         Ok(resp) => {
             let msg = resp

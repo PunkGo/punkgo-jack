@@ -62,7 +62,11 @@ pub fn new_request_id() -> String {
 }
 
 fn default_endpoint() -> String {
-    "punkgo-kernel".to_string()
+    if cfg!(windows) {
+        r"\\.\pipe\punkgo-kernel".to_string()
+    } else {
+        "punkgo-kernel".to_string()
+    }
 }
 
 fn send_raw(endpoint: &str, request_line: &str) -> Result<String> {

@@ -4,6 +4,28 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.3.0] - 2026-03-13
+
+Energy model fix and daemon lifecycle improvements.
+
+### Energy System Fix (P0)
+
+- **Fixed energy starvation bug**: agents were starved by root's dominant `energy_share` (`floor()` rounded to 0)
+- Energy distribution now targets agents only — humans (including root) get one-time initial balance
+- Default actor seed: `energy_balance` 100,000 (was 10,000), `energy_share` 50.0 (was 0.1)
+- Session summary energy display: fixed field name mismatch (`"balance"` → `"energy_balance"`), removed stale hardcoded initial balance
+
+### Daemon Lifecycle (P1)
+
+- `kill_stale_daemon()`: auto-kills leftover daemon processes before starting a new one
+- Windows IPC endpoint changed to file-path pipe (`\\.\pipe\punkgo-kernel`) — fixes "Access Denied" with `GenericNamespaced`
+- Session start energy check (`check_energy_level`): warns if actor energy is critically low
+
+### Compatibility
+
+- Zero migration: existing databases work automatically (SQL filters by `actor_type = 'agent'`)
+- Requires punkgo-kernel ≥ 0.3.0
+
 ## [0.2.1] - 2026-03-08
 
 Release readiness — cross-platform fixes, blob store, energy model, dependency diet.

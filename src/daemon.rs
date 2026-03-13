@@ -25,6 +25,9 @@ pub fn ensure_kernel_running(client: &IpcClient) -> Result<Option<String>, Strin
         return Err("punkgo-kerneld not found".into());
     };
 
+    // Kill any stale daemon before starting a new one.
+    kill_stale_daemon();
+
     info!(path = %kerneld_path.display(), "auto-starting punkgo-kerneld");
 
     if let Err(e) = spawn_kerneld(&kerneld_path) {
@@ -132,6 +135,40 @@ pub fn save_kerneld_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Kill any stale `punkgo-kerneld` processes left over from a previous session.
+/// This ensures a clean named pipe on Windows where stale handles block creation.
+fn kill_stale_daemon() {
+    #[cfg(windows)]
+    {
+        let output = Command::new("taskkill")
+            .args(["/F", "/IM", "punkgo-kerneld.exe"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        if let Ok(o) = output {
+            if o.status.success() {
+                info!("killed stale punkgo-kerneld process");
+                // Wait for pipe handle to release.
+                thread::sleep(Duration::from_secs(2));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("pkill")
+            .args(["-x", "punkgo-kerneld"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        if let Ok(o) = output {
+            if o.status.success() {
+                info!("killed stale punkgo-kerneld process");
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+}
+
 /// Spawn `punkgo-kerneld` as a detached background process.
 fn spawn_kerneld(path: &PathBuf) -> Result<()> {
     let state_dir = default_state_dir()?;
@@ -187,8 +224,8 @@ fn try_seed_actor(client: &IpcClient) {
                 "actor_id": "claude-code",
                 "actor_type": "agent",
                 "purpose": "claude-code-adapter",
-                "energy_balance": 10000,
-                "energy_share": 0.1
+                "energy_balance": 100_000,
+                "energy_share": 50.0
             }
         }),
     };

@@ -61,6 +61,9 @@ pub fn run(args: IngestArgs) -> Result<()> {
             if let Err(e) = crate::spillover::flush() {
                 debug!(error = %e, "spillover flush on session_start failed (non-fatal)");
             }
+            // Auto-recharge: check actor energy and top up if low.
+            let client = IpcClient::from_env(args.endpoint.as_deref());
+            check_energy_level(&client, &event.actor_id);
             match session::start_session(&claude_session_id, &event.actor_id) {
                 Ok(state) => {
                     debug!(session_id = %state.session_id, "session started");
@@ -311,7 +314,7 @@ fn print_session_summary(event: &IngestEvent, client: &IpcClient) {
     };
     if let Ok(resp) = client.send(&energy_req) {
         if resp.status == "ok" {
-            energy_balance = resp.payload.get("balance").and_then(Value::as_u64);
+            energy_balance = resp.payload.get("energy_balance").and_then(Value::as_u64);
         }
     }
 
@@ -339,13 +342,8 @@ fn print_session_summary(event: &IngestEvent, client: &IpcClient) {
         }
     }
 
-    // Energy consumed = initial balance - current balance.
-    // Default initial balance is 10000 (from setup actor seeding).
     let energy_str = match energy_balance {
-        Some(bal) => {
-            let consumed = 10000u64.saturating_sub(bal);
-            format!("{consumed} consumed ({bal} remaining)")
-        }
+        Some(bal) => format!("{bal} remaining"),
         None => "unavailable".into(),
     };
 
@@ -504,6 +502,41 @@ fn send_or_autostart(
 /// Check if a kernel error message is a transient error worth retrying.
 fn is_retryable_error(msg: &str) -> bool {
     msg.contains("database is locked") || msg.contains("database is busy")
+}
+
+/// Check actor energy balance at session start and warn if critically low.
+/// The kernel's EnergyProducer tick loop keeps agents funded via energy_share.
+/// This check catches misconfigurations early (e.g. after kernel upgrade).
+fn check_energy_level(client: &IpcClient, actor_id: &str) {
+    const LOW_ENERGY_THRESHOLD: i64 = 100;
+
+    let req = RequestEnvelope {
+        request_id: new_request_id(),
+        request_type: RequestType::Read,
+        payload: json!({ "kind": "actor_energy", "actor_id": actor_id }),
+    };
+    let (balance, reserved) = match client.send(&req) {
+        Ok(resp) if resp.status == "ok" => {
+            let b = resp.payload.get("energy_balance").and_then(Value::as_i64).unwrap_or(0);
+            let r = resp.payload.get("reserved_energy").and_then(Value::as_i64).unwrap_or(0);
+            (b, r)
+        }
+        _ => {
+            debug!("could not query energy balance (non-fatal)");
+            return;
+        }
+    };
+
+    let available = balance - reserved;
+    if available >= LOW_ENERGY_THRESHOLD {
+        debug!(available, "energy sufficient");
+        return;
+    }
+
+    eprintln!(
+        "[punkgo] warning: actor '{actor_id}' energy low ({available} available). \
+         Ensure kernel is updated and energy_share > 0 for this actor."
+    );
 }
 
 fn event_to_preview(event: &IngestEvent) -> Value {

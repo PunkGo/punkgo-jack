@@ -168,7 +168,7 @@ The statusline shows `punkgo:⚡N` — your daily cumulative energy across all s
 
 | Variable | Default |
 |----------|---------|
-| `PUNKGO_DAEMON_ENDPOINT` | `punkgo-kernel` named pipe |
+| `PUNKGO_DAEMON_ENDPOINT` | `\\.\pipe\punkgo-kernel` (Windows) / `punkgo-kernel` (Unix) |
 | `PUNKGO_DATA_DIR` | `~/.punkgo` |
 | `PUNKGO_STATE_DIR` | `~/.punkgo/state` |
 | `PUNKGO_CAPTURE_RESPONSE` | `summary` (options: `full`, `summary`, `none`) |
