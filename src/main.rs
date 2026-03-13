@@ -4,6 +4,7 @@ mod audit_rebuild;
 mod backend;
 mod blob;
 mod daemon;
+mod export;
 mod history;
 mod ingest;
 mod ipc_client;
@@ -43,6 +44,7 @@ fn print_usage() {
          \x20 ingest [OPTIONS]        Ingest hook data from stdin into kernel\n\
          \x20 setup <TOOL>            Install punkgo hooks into a tool\n\
          \x20 unsetup <TOOL> [--purge] Remove punkgo hooks (--purge: also delete local state)\n\
+         \x20 export [OPTIONS]        Export events as markdown or JSON\n\
          \x20 history [OPTIONS]       List recent recorded actions\n\
          \x20 show <EVENT_ID>         Show full details of a single event\n\
          \x20 receipt [SESSION_ID]    Generate session receipt\n\
@@ -54,6 +56,13 @@ fn print_usage() {
          \x20 flush                   Replay spillover events to kernel\n\
          \x20 rebuild-audit           Rebuild Merkle tree from event hashes\n\
          \x20 help                    Show this message\n\
+         \n\
+         Export options:\n\
+         \x20 --session <ID>          Filter by session ID\n\
+         \x20 --last <N>              Export last N events\n\
+         \x20 --format <FMT>          Output format: markdown (default), json\n\
+         \x20 --output <FILE>         Write to file instead of stdout\n\
+         \x20 --actor <ID>            Filter by actor\n\
          \n\
          Query options (history, presence):\n\
          \x20 --actor <ID>            Filter by actor (default: from session, or all)\n\
@@ -88,6 +97,7 @@ fn main() {
 
     let result = match cmd.as_str() {
         "serve" => run_serve(),
+        "export" => run_export(&mut args),
         "ingest" => run_ingest(&mut args),
         "setup" => run_setup(&mut args),
         "unsetup" => run_unsetup(&mut args),
@@ -128,6 +138,11 @@ fn run_serve() -> Result<()> {
         .build()
         .context("failed to build tokio runtime for punkgo-jack server")?;
     runtime.block_on(mcp::run_stdio(backend))
+}
+
+fn run_export(args: &mut impl Iterator<Item = String>) -> Result<()> {
+    let parsed = export::parse_args(args)?;
+    export::run_export(parsed)
 }
 
 fn run_ingest(args: &mut impl Iterator<Item = String>) -> Result<()> {
