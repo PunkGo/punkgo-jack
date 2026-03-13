@@ -172,10 +172,7 @@ fn fetch_all_events(
 
         // next_cursor is the smallest log_index in this page (last element,
         // since results are ordered DESC). Use it as before_index for next page.
-        let next_cursor = resp
-            .payload
-            .get("next_cursor")
-            .and_then(Value::as_i64);
+        let next_cursor = resp.payload.get("next_cursor").and_then(Value::as_i64);
 
         all_events.extend(events);
 
@@ -212,9 +209,7 @@ fn fetch_all_events(
 
 fn event_matches_session(event: &Value, session_id: &str) -> bool {
     // Check payload.metadata.session_id or payload.metadata.punkgo_session_id.
-    let meta = event
-        .get("payload")
-        .and_then(|p| p.get("metadata"));
+    let meta = event.get("payload").and_then(|p| p.get("metadata"));
 
     if let Some(m) = meta {
         if let Some(sid) = m.get("session_id").and_then(Value::as_str) {
@@ -263,7 +258,8 @@ fn format_markdown(events: &[&Value], session_id: Option<&str>) -> String {
     out.push('\n');
 
     // Stats summary.
-    let mut type_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut type_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut total_energy: u64 = 0;
     for event in events {
         let event_type = event
@@ -324,11 +320,12 @@ fn format_markdown(events: &[&Value], session_id: Option<&str>) -> String {
             .unwrap_or("");
 
         let log_index = event.get("log_index").and_then(Value::as_u64);
-        let energy = event.get("settled_energy").and_then(Value::as_u64).unwrap_or(0);
+        let energy = event
+            .get("settled_energy")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
 
-        out.push_str(&format!(
-            "- **{time_str}** `{event_type}` — {target}"
-        ));
+        out.push_str(&format!("- **{time_str}** `{event_type}` — {target}"));
         if energy > 0 {
             out.push_str(&format!(" (energy: {energy})"));
         }
@@ -462,11 +459,16 @@ mod tests {
     #[test]
     fn parse_args_full() {
         let args_vec = vec![
-            "--session", "ses_abc",
-            "--last", "100",
-            "--format", "json",
-            "--output", "export.json",
-            "--actor", "claude-code",
+            "--session",
+            "ses_abc",
+            "--last",
+            "100",
+            "--format",
+            "json",
+            "--output",
+            "export.json",
+            "--actor",
+            "claude-code",
         ];
         let mut args = args_vec.into_iter().map(String::from);
         let parsed = parse_args(&mut args).unwrap();

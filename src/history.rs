@@ -165,7 +165,11 @@ pub fn run_show(args: ShowArgs) -> Result<()> {
         }
         if args.json {
             println!("{}", serde_json::to_string_pretty(&cp_resp.payload)?);
-        } else if let Some(text) = cp_resp.payload.get("checkpoint_text").and_then(Value::as_str) {
+        } else if let Some(text) = cp_resp
+            .payload
+            .get("checkpoint_text")
+            .and_then(Value::as_str)
+        {
             print!("{text}");
         } else {
             println!("{}", serde_json::to_string_pretty(&cp_resp.payload)?);

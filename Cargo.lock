@@ -1071,9 +1071,9 @@ dependencies = [
 
 [[package]]
 name = "punkgo-core"
-version = "0.2.8"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e538e3cc446a92b98db50275d5e627fb079628d07c03cb941c41032da58f4f9"
+checksum = "ce79d3e4946cc1264a0a4b5ce2edd21c0105dc4470e776f406b8ca0df623b71c"
 dependencies = [
  "globset",
  "serde",
@@ -1108,9 +1108,9 @@ dependencies = [
 
 [[package]]
 name = "punkgo-kernel"
-version = "0.2.8"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a84a02690923ad42a197672ac7b39bc736ec719d5d13f1fb9477a0f389963de3"
+checksum = "c7e3d0e6b1b694fce2ea21176d29490160753dad67b72cd721769c10289e2202"
 dependencies = [
  "anyhow",
  "async-trait",

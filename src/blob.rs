@@ -62,6 +62,7 @@ pub fn externalize(content: &str) -> Result<Option<String>> {
 
 /// Retrieve content from the blob store by hash reference.
 /// Accepts both "sha256:<hex>" format and bare hex.
+#[allow(dead_code)]
 pub(crate) fn resolve(hash_ref: &str) -> Result<Option<String>> {
     let hex = hash_ref.strip_prefix("sha256:").unwrap_or(hash_ref);
     let path = blob_path(hex)?;

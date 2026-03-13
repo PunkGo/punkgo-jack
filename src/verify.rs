@@ -20,10 +20,7 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<VerifyArgs>
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--file" | "-f" => {
-                file = Some(
-                    args.next()
-                        .context("--file requires a path")?,
-                );
+                file = Some(args.next().context("--file requires a path")?);
             }
             _ if event_id.is_none() => event_id = Some(arg),
             other => bail!("unknown verify option: {other}"),
@@ -44,8 +41,8 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<VerifyArgs>
 /// 2. `punkgo-jack verify --file proof.json` — fully offline from exported JSON
 pub fn run_verify(args: VerifyArgs) -> Result<()> {
     let data: Value = if let Some(path) = &args.file {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read {path}"))?;
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
         serde_json::from_str(&content)?
     } else if let Some(event_id) = &args.event_id {
         fetch_from_daemon(event_id)?
@@ -54,9 +51,7 @@ pub fn run_verify(args: VerifyArgs) -> Result<()> {
     };
 
     // Extract fields for verification.
-    let event = data
-        .get("event")
-        .unwrap_or(&data);
+    let event = data.get("event").unwrap_or(&data);
 
     let event_hash_hex = event
         .get("event_hash")
@@ -96,7 +91,13 @@ pub fn run_verify(args: VerifyArgs) -> Result<()> {
         .map(|h| hex_to_tlog_hash(h))
         .collect::<Result<Vec<_>>>()?;
 
-    println!("Event:      {}", event.get("id").and_then(Value::as_str).unwrap_or(event_hash_hex));
+    println!(
+        "Event:      {}",
+        event
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or(event_hash_hex)
+    );
     println!("Log index:  {log_index}");
     println!("Tree size:  {tree_size}");
     println!("Leaf hash:  {event_hash_hex}");
@@ -270,8 +271,8 @@ fn node_hash(left: tlog::Hash, right: tlog::Hash) -> tlog::Hash {
 }
 
 fn hex_to_tlog_hash(hex_str: &str) -> Result<tlog::Hash> {
-    let bytes = hex_decode(hex_str)
-        .map_err(|e| anyhow::anyhow!("invalid hex hash '{hex_str}': {e}"))?;
+    let bytes =
+        hex_decode(hex_str).map_err(|e| anyhow::anyhow!("invalid hex hash '{hex_str}': {e}"))?;
     if bytes.len() != 32 {
         bail!("hash must be 32 bytes, got {}", bytes.len());
     }
@@ -281,7 +282,7 @@ fn hex_to_tlog_hash(hex_str: &str) -> Result<tlog::Hash> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd length".into());
     }
     (0..s.len())
@@ -305,10 +306,7 @@ mod tests {
     struct TestHashStorage(Vec<tlog::Hash>);
 
     impl tlog::HashReader for TestHashStorage {
-        fn read_hashes(
-            &self,
-            indexes: &[u64],
-        ) -> Result<Vec<tlog::Hash>, tlog_tiles::Error> {
+        fn read_hashes(&self, indexes: &[u64]) -> Result<Vec<tlog::Hash>, tlog_tiles::Error> {
             let mut out = Vec::with_capacity(indexes.len());
             for &idx in indexes {
                 out.push(self.0[idx as usize]);
@@ -473,8 +471,7 @@ mod tests {
 
         for i in 0..7u64 {
             let proof = tlog::prove_record(7, i, &storage).unwrap();
-            let computed =
-                compute_root_from_proof(&proof, 7, i, leaves[i as usize]).unwrap();
+            let computed = compute_root_from_proof(&proof, 7, i, leaves[i as usize]).unwrap();
             assert_eq!(
                 computed, tree_root,
                 "root mismatch for leaf {i} in 7-leaf tree"
@@ -491,8 +488,7 @@ mod tests {
         // Spot check several positions: first, last, middle, power-of-2 boundary
         for &i in &[0u64, 1, 31, 32, 63, 64, 98, 99] {
             let proof = tlog::prove_record(100, i, &storage).unwrap();
-            let computed =
-                compute_root_from_proof(&proof, 100, i, leaves[i as usize]).unwrap();
+            let computed = compute_root_from_proof(&proof, 100, i, leaves[i as usize]).unwrap();
             assert_eq!(
                 computed, tree_root,
                 "root mismatch for leaf {i} in 100-leaf tree"
@@ -514,8 +510,7 @@ mod tests {
             tlog::check_record(&proof, 50, tree_root, i, leaves[i as usize]).unwrap();
 
             // Our compute should produce the same root
-            let computed =
-                compute_root_from_proof(&proof, 50, i, leaves[i as usize]).unwrap();
+            let computed = compute_root_from_proof(&proof, 50, i, leaves[i as usize]).unwrap();
             assert_eq!(computed, tree_root);
         }
     }

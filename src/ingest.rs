@@ -517,8 +517,16 @@ fn check_energy_level(client: &IpcClient, actor_id: &str) {
     };
     let (balance, reserved) = match client.send(&req) {
         Ok(resp) if resp.status == "ok" => {
-            let b = resp.payload.get("energy_balance").and_then(Value::as_i64).unwrap_or(0);
-            let r = resp.payload.get("reserved_energy").and_then(Value::as_i64).unwrap_or(0);
+            let b = resp
+                .payload
+                .get("energy_balance")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let r = resp
+                .payload
+                .get("reserved_energy")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             (b, r)
         }
         _ => {

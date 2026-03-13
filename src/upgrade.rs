@@ -5,16 +5,14 @@ use std::process::Command;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GITHUB_REPO: &str = "PunkGo/punkgo-jack";
-const INSTALL_SH: &str =
-    "https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.sh";
-const INSTALL_PS1: &str =
-    "https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.ps1";
+const INSTALL_SH: &str = "https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.sh";
+const INSTALL_PS1: &str = "https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.ps1";
 
 pub fn run_upgrade() -> Result<()> {
     println!("Current: v{CURRENT_VERSION}");
 
-    let latest = fetch_latest_tag()
-        .context("failed to check latest version (need internet + curl)")?;
+    let latest =
+        fetch_latest_tag().context("failed to check latest version (need internet + curl)")?;
     let latest_ver = latest.trim_start_matches('v');
 
     println!("Latest:  v{latest_ver}");
