@@ -62,11 +62,46 @@ pub fn new_request_id() -> String {
 }
 
 fn default_endpoint() -> String {
+    // 1. Try daemon.addr (written by kernel with per-PID endpoint)
+    if let Some(addr) = read_daemon_addr() {
+        return addr;
+    }
+    // 2. Fallback to old hardcoded address (backward compat with old kernel)
     if cfg!(windows) {
         r"\\.\pipe\punkgo-kernel".to_string()
     } else {
         "punkgo-kernel".to_string()
     }
+}
+
+/// Read the daemon address from `~/.punkgo/state/daemon.addr`.
+///
+/// The kernel daemon writes this file with a per-PID endpoint address.
+/// Format: `addr=<endpoint>` (one per line, first match wins).
+fn read_daemon_addr() -> Option<String> {
+    let state_dir = std::env::var("PUNKGO_STATE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".into());
+            std::path::PathBuf::from(home).join(".punkgo").join("state")
+        });
+    let addr_path = state_dir.join("daemon.addr");
+    let content = std::fs::read_to_string(&addr_path).ok()?;
+    parse_addr(&content)
+}
+
+fn parse_addr(content: &str) -> Option<String> {
+    for line in content.lines() {
+        if let Some(addr) = line.strip_prefix("addr=") {
+            let addr = addr.trim();
+            if !addr.is_empty() {
+                return Some(addr.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn send_raw(endpoint: &str, request_line: &str) -> Result<String> {
@@ -96,4 +131,49 @@ fn send_raw(endpoint: &str, request_line: &str) -> Result<String> {
         bail!("empty response from daemon");
     }
     Ok(resp.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_addr_extracts_endpoint() {
+        let content = "addr=//./pipe/punkgo-kernel-1234\n";
+        assert_eq!(
+            parse_addr(content),
+            Some("//./pipe/punkgo-kernel-1234".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_addr_unix_socket() {
+        let content = "pid=42\naddr=/home/user/.punkgo/state/daemon-42.sock\n";
+        assert_eq!(
+            parse_addr(content),
+            Some("/home/user/.punkgo/state/daemon-42.sock".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_addr_empty_value() {
+        assert_eq!(parse_addr("addr=\n"), None);
+        assert_eq!(parse_addr("addr=  \n"), None);
+    }
+
+    #[test]
+    fn parse_addr_no_addr_line() {
+        assert_eq!(parse_addr("pid=42\nversion=1\n"), None);
+    }
+
+    #[test]
+    fn parse_addr_empty_file() {
+        assert_eq!(parse_addr(""), None);
+    }
+
+    #[test]
+    fn parse_addr_trims_whitespace() {
+        let content = "addr=  /tmp/test.sock  \n";
+        assert_eq!(parse_addr(content), Some("/tmp/test.sock".to_string()));
+    }
 }

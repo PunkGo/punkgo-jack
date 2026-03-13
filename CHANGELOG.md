@@ -4,6 +4,17 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.4.0] - 2026-03-13
+
+### Changed
+- IPC endpoint discovery: jack now reads `~/.punkgo/state/daemon.addr` instead of using a hardcoded address
+- Removed `kill_stale_daemon()` — daemon lifecycle managed by kernel's flock-based locking
+- Falls back to legacy endpoint for backward compatibility with older kernels
+- After daemon auto-start, re-reads `daemon.addr` to pick up the new per-PID endpoint
+
+### Fixed
+- Stale socket/pipe issues after daemon crash on all platforms
+
 ## [0.3.1] - 2026-03-13
 
 Energy model fix and daemon lifecycle improvements.

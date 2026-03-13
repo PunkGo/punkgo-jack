@@ -480,12 +480,14 @@ fn send_or_autostart(
                                 println!("{}", json!({ "systemMessage": msg }));
                             }
                         }
+                        // Re-read daemon.addr for the fresh daemon's endpoint
+                        let fresh_client = IpcClient::from_env(None);
                         let retry_req = RequestEnvelope {
                             request_id: new_request_id(),
                             request_type: RequestType::Submit,
                             payload: payload.clone(),
                         };
-                        return client
+                        return fresh_client
                             .send(&retry_req)
                             .context("IPC retry failed after auto-start");
                     }

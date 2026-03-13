@@ -25,8 +25,8 @@ pub fn ensure_kernel_running(client: &IpcClient) -> Result<Option<String>, Strin
         return Err("punkgo-kerneld not found".into());
     };
 
-    // Kill any stale daemon before starting a new one.
-    kill_stale_daemon();
+    // NOTE: No more kill_stale_daemon() — daemon lifecycle managed by kernel's
+    // flock-based locking. Per-PID sockets/pipes avoid stale handle issues.
 
     info!(path = %kerneld_path.display(), "auto-starting punkgo-kerneld");
 
@@ -36,12 +36,14 @@ pub fn ensure_kernel_running(client: &IpcClient) -> Result<Option<String>, Strin
     }
 
     // Wait for daemon to become available (up to 5 seconds).
+    // Re-read daemon.addr each iteration since the new daemon writes a new address.
     for attempt in 1..=10 {
         thread::sleep(Duration::from_millis(500));
-        if ping(client) {
+        // Create a fresh client that re-reads daemon.addr
+        let fresh_client = IpcClient::from_env(None);
+        if ping(&fresh_client) {
             info!(attempts = attempt, "punkgo-kerneld is ready");
-            // Seed actor on fresh daemon start.
-            try_seed_actor(client);
+            try_seed_actor(&fresh_client);
             return Ok(Some(format!(
                 "punkgo kernel started ({}ms) — AI actions are being recorded",
                 attempt * 500
@@ -133,40 +135,6 @@ pub fn save_kerneld_path(path: &Path) -> Result<()> {
     std::fs::write(&target, path.to_string_lossy().as_bytes())
         .with_context(|| format!("failed to write {}", target.display()))?;
     Ok(())
-}
-
-/// Kill any stale `punkgo-kerneld` processes left over from a previous session.
-/// This ensures a clean named pipe on Windows where stale handles block creation.
-fn kill_stale_daemon() {
-    #[cfg(windows)]
-    {
-        let output = Command::new("taskkill")
-            .args(["/F", "/IM", "punkgo-kerneld.exe"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        if let Ok(o) = output {
-            if o.status.success() {
-                info!("killed stale punkgo-kerneld process");
-                // Wait for pipe handle to release.
-                thread::sleep(Duration::from_secs(2));
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("pkill")
-            .args(["-x", "punkgo-kerneld"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        if let Ok(o) = output {
-            if o.status.success() {
-                info!("killed stale punkgo-kerneld process");
-                thread::sleep(Duration::from_secs(1));
-            }
-        }
-    }
 }
 
 /// Spawn `punkgo-kerneld` as a detached background process.

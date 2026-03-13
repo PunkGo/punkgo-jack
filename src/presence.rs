@@ -139,14 +139,17 @@ fn build_heatmap(events: &[Value], max_days: usize) -> (Vec<DayRow>, Stats) {
         }
     }
 
-    // Build rows (most recent `max_days` days)
-    let all_days: Vec<String> = day_hour.keys().cloned().collect();
-    let start = if all_days.len() > max_days {
-        all_days.len() - max_days
-    } else {
-        0
-    };
-    let selected_days = &all_days[start..];
+    // Build rows for the last `max_days` calendar days (always show full range,
+    // like GitHub's contribution graph — empty days get all-zero rows).
+    let today = chrono::Local::now().date_naive();
+    let selected_days: Vec<String> = (0..max_days)
+        .rev()
+        .map(|i| {
+            (today - chrono::Duration::days(i as i64))
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .collect();
 
     // Peak hour across all days
     let mut hour_totals = [0u32; 24];
