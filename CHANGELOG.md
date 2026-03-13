@@ -4,7 +4,7 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
-## [0.3.0] - 2026-03-13
+## [0.3.1] - 2026-03-13
 
 Energy model fix and daemon lifecycle improvements.
 
