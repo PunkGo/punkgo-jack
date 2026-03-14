@@ -183,14 +183,9 @@ fn setup_cursor() -> Result<()> {
     if claude_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&claude_path) {
             if content.contains("punkgo-jack") {
+                eprintln!("note: Cursor may also trigger Claude Code hooks (Third-party skills).");
                 eprintln!(
-                    "IMPORTANT: Cursor also reads Claude Code hooks, causing duplicate execution."
-                );
-                eprintln!(
-                    "      Please disable: Cursor Settings → Features → Third-party skills → OFF"
-                );
-                eprintln!(
-                    "      This does NOT affect Claude Code — only stops Cursor from reading its hooks."
+                    "      This is handled automatically — duplicates are detected and skipped."
                 );
             }
         }
@@ -472,7 +467,7 @@ fn try_seed_actor(actor_id: &str) {
             "payload": {
                 "actor_id": actor_id,
                 "actor_type": "agent",
-                "purpose": "claude-code-adapter",
+                "purpose": format!("{actor_id}-adapter"),
                 "energy_balance": 100_000,
                 "energy_share": 50.0
             }

@@ -553,12 +553,7 @@ pub fn punkgo_session_receipt(
             })));
         };
 
-        // Fetch events. Use session's actor_id if available, otherwise query all.
-        let actor_id = crate::session::latest_session()
-            .ok()
-            .flatten()
-            .map(|s| s.actor_id);
-        let payload = backend.query(actor_id, Some(100))?;
+        let payload = backend.query(None, Some(100))?;
         let events = payload
             .get("events")
             .and_then(Value::as_array)

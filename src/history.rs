@@ -322,15 +322,7 @@ pub fn run_receipt(args: ReceiptArgs) -> Result<()> {
         String::new()
     };
 
-    // Fetch events. Use session's actor_id if available.
-    let actor_id = crate::session::latest_session()
-        .ok()
-        .flatten()
-        .map(|s| s.actor_id);
-    let mut receipt_payload = json!({ "kind": "events", "limit": 100 });
-    if let Some(ref actor) = actor_id {
-        receipt_payload["actor_id"] = json!(actor);
-    }
+    let receipt_payload = json!({ "kind": "events", "limit": 100 });
     let req = RequestEnvelope {
         request_id: new_request_id(),
         request_type: RequestType::Read,
@@ -587,15 +579,9 @@ fn today_start_ms() -> u64 {
 }
 
 /// Resolve the actor_id for queries.
-/// Priority: explicit CLI flag > active session > None (query all actors).
+/// Priority: explicit CLI flag > None (query all actors).
 fn resolve_actor_id(explicit: Option<&str>) -> Option<String> {
-    if let Some(actor) = explicit {
-        return Some(actor.to_string());
-    }
-    crate::session::latest_session()
-        .ok()
-        .flatten()
-        .map(|s| s.actor_id)
+    explicit.map(|s| s.to_string())
 }
 
 #[cfg(test)]

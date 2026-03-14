@@ -36,12 +36,7 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<PresenceArg
 
 pub fn run_presence(args: PresenceArgs) -> Result<()> {
     let client = IpcClient::from_env(None);
-    let actor_id = args.actor.or_else(|| {
-        crate::session::latest_session()
-            .ok()
-            .flatten()
-            .map(|s| s.actor_id)
-    });
+    let actor_id = args.actor;
     let events = fetch_all_events(&client, actor_id.as_deref())?;
 
     if events.is_empty() {

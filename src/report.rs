@@ -111,17 +111,11 @@ fn fetch_session_events(client: &IpcClient, session_id: &str) -> Result<Vec<Valu
     let mut all_events: Vec<Value> = Vec::new();
     let mut before_index: Option<i64> = None;
 
-    // Use session's actor_id if available, otherwise query all.
-    let actor_id = session::latest_session().ok().flatten().map(|s| s.actor_id);
-
     loop {
         let mut payload = json!({
             "kind": "events",
             "limit": 500
         });
-        if let Some(ref actor) = actor_id {
-            payload["actor_id"] = json!(actor);
-        }
         if let Some(bi) = before_index {
             payload["before_index"] = json!(bi);
         }

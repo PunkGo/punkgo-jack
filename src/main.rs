@@ -64,8 +64,8 @@ fn print_usage() {
          \x20 --output <FILE>         Write to file instead of stdout\n\
          \x20 --actor <ID>            Filter by actor\n\
          \n\
-         Query options (history, presence):\n\
-         \x20 --actor <ID>            Filter by actor (default: from session, or all)\n\
+         Query options (history, presence, export):\n\
+         \x20 --actor <ID>            Filter by actor (e.g. claude-code, cursor). Default: all\n\
          \n\
          Ingest options:\n\
          \x20 --source <NAME>         Data source (claude-code, cursor)\n\

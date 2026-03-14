@@ -40,7 +40,7 @@ punkgo-jack setup cursor        # Cursor IDE
   <img src="https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/assets/history.svg" alt="PunkGo history — every tool call recorded with energy cost and Merkle receipt" width="680">
 </p>
 
-Every event gets a hash. Every hash gets appended to a Merkle tree. The tree is append-only — nobody can alter history without detection. Your statusline shows today's cumulative energy: `punkgo:⚡940`.
+Every event gets a hash. Every hash gets appended to a Merkle tree. The tree is append-only — nobody can alter history without detection. Your statusline shows today's cumulative energy across all agents: `punkgo:⚡940`. Use `--actor` to filter by agent (e.g. `punkgo-jack presence --actor cursor`).
 
 ## Verify
 
@@ -90,6 +90,7 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 ## Requirements
 
 - **Claude Code >= 1.0.85** — requires `SessionStart`, `SessionEnd`, and `UserPromptSubmit` hooks. Older versions partially work (tool call recording is fine, but session tracking and statusline won't function).
+- **Cursor** — hooks support required (available in recent versions). Dual-tool users: Cursor may also trigger Claude Code hooks via Third-party skills — punkgo-jack detects this automatically and skips duplicates.
 - **Rust toolchain** only needed if installing via `cargo install` instead of the one-line installer.
 
 ## How It Works

@@ -4,6 +4,13 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.4.2] - 2026-03-15
+
+### Changed
+- All query commands (presence, history, export) default to showing all agents when `--actor` is not specified
+- `try_seed_actor` now uses per-actor purpose field instead of hardcoded "claude-code-adapter"
+- `setup cursor` messaging: informs user that duplicates are auto-detected (no manual action needed)
+
 ## [0.4.1] - 2026-03-14
 
 ### Added

@@ -70,13 +70,7 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<ExportArgs>
 pub fn run_export(args: ExportArgs) -> Result<()> {
     let client = IpcClient::from_env(None);
 
-    // Resolve actor_id: explicit > session > None.
-    let actor_id = args.actor.clone().or_else(|| {
-        crate::session::latest_session()
-            .ok()
-            .flatten()
-            .map(|s| s.actor_id)
-    });
+    let actor_id = args.actor.clone();
 
     // Fetch all events with pagination.
     let all_events = fetch_all_events(&client, actor_id.as_deref(), args.last)?;
