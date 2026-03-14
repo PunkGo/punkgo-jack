@@ -27,14 +27,52 @@ pub struct IngestArgs {
 /// - 0: success (or dry-run)
 /// - 1: failure (never exit 2 — that blocks Claude Code tool calls)
 pub fn run(args: IngestArgs) -> Result<()> {
+    // Cursor requires valid JSON on stdout even when ingest fails.
+    // Wrap the real logic so we can output a fallback response on error.
+    let result = run_inner(&args);
+    if let Err(ref e) = result {
+        debug!(error = %e, "ingest failed, outputting fallback JSON");
+        // Output a permissive response so Cursor doesn't block.
+        // Use write+flush to ensure output arrives before process exits.
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = out.write_all(b"{\"permission\":\"allow\",\"continue\":true}");
+        let _ = out.flush();
+        // Swallow the error — Cursor hooks must exit 0 with valid JSON.
+        return Ok(());
+    }
+    result
+}
+
+fn run_inner(args: &IngestArgs) -> Result<()> {
     debug!(source = %args.source, dry_run = args.dry_run, "ingest started");
 
-    // 1. Read stdin.
-    let raw_json = read_stdin()?;
+    // 0. Fast skip: Cursor sets CURSOR_VERSION for all hook subprocesses.
+    //    When a claude-code hook is triggered by Cursor, skip immediately —
+    //    the dedicated cursor hook (--source cursor) handles recording.
+    //    No stdin read, no IPC, no stderr. Zero overhead.
+    if args.source == "claude-code" && std::env::var("CURSOR_VERSION").is_ok() {
+        let raw = read_stdin().unwrap_or_else(|_| json!({}));
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = out.write_all(cursor_default_response(&raw).to_string().as_bytes());
+        let _ = out.flush();
+        return Ok(());
+    }
+
+    // 1. Read stdin. Cursor may send empty stdin for some events.
+    let raw_json = read_stdin().unwrap_or_else(|_| json!({}));
+    let is_cursor = raw_json.get("cursor_version").is_some();
 
     // 2. Select adapter.
-    let adapter = adapters::adapter_for_source(&args.source)
-        .with_context(|| format!("unknown source: '{}'. Supported: claude-code", args.source))?;
+    let adapter = adapters::adapter_for_source(&args.source).with_context(|| {
+        format!(
+            "unknown source: '{}'. Supported: claude-code, cursor",
+            args.source
+        )
+    })?;
 
     // 3. Transform.
     let mut event = adapter
@@ -45,11 +83,22 @@ pub fn run(args: IngestArgs) -> Result<()> {
     if let Some(ref override_type) = args.event_type_override {
         debug!(override_type, "event_type overridden by CLI flag");
         event.event_type = override_type.clone();
+        // Fix target when stdin was empty (Cursor sometimes sends no stdin
+        // for session events) and adapter produced "tool:unknown".
+        if event.target == "tool:unknown" {
+            event.target = format!("session:{override_type}");
+        }
     }
 
-    // Extract Claude Code session_id from the raw input for per-session state files.
+    let detected_source = if is_cursor { "cursor" } else { &args.source };
+    event.source = detected_source.to_string();
+    event.actor_id = detected_source.to_string();
+
+    // Extract session_id from the raw hook input for per-session state files.
+    // Cursor uses "conversation_id", Claude Code uses "session_id".
     let claude_session_id = raw_json
         .get("session_id")
+        .or_else(|| raw_json.get("conversation_id"))
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_string();
@@ -114,11 +163,20 @@ pub fn run(args: IngestArgs) -> Result<()> {
         "adapter transform complete"
     );
 
+    // Build the default quiet response once (Cursor needs typed responses).
+    let quiet_response = if is_cursor {
+        cursor_default_response(&raw_json)
+    } else {
+        json!({})
+    };
+
     // 4. Dry-run: print the event and exit.
     if args.dry_run {
         info!(event_type = %event.event_type, target = %event.target, "dry-run, skipping IPC submit");
         let preview = event_to_preview(&event);
-        if !args.quiet {
+        if args.quiet {
+            println!("{quiet_response}");
+        } else {
             println!("{}", serde_json::to_string_pretty(&preview)?);
         }
         return Ok(());
@@ -128,7 +186,18 @@ pub fn run(args: IngestArgs) -> Result<()> {
     let client = IpcClient::from_env(args.endpoint.as_deref());
     let payload = event_to_submit_payload(&event);
 
-    let resp = submit_with_retry(&client, &payload, &args)?;
+    let resp = match submit_with_retry(&client, &payload, args) {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, "submit failed");
+            if let Err(spill_err) = crate::spillover::spill(&payload) {
+                error!(error = %spill_err, "failed to write spillover");
+            }
+            // Output permissive response so Cursor doesn't block.
+            println!("{quiet_response}");
+            return Ok(());
+        }
+    };
 
     // 6. Output result.
     match resp.status.as_str() {
@@ -149,7 +218,9 @@ pub fn run(args: IngestArgs) -> Result<()> {
             if let Err(e) = session::record_event(&claude_session_id, settled_cost) {
                 debug!(error = %e, "failed to record event in session");
             }
-            if !args.quiet {
+            if args.quiet {
+                println!("{quiet_response}");
+            } else {
                 println!(
                     "{}",
                     json!({ "ok": true, "event_id": event_id, "payload": resp.payload })
@@ -176,7 +247,9 @@ pub fn run(args: IngestArgs) -> Result<()> {
             if let Err(spill_err) = crate::spillover::spill(&payload) {
                 error!(error = %spill_err, "failed to write spillover after kernel error");
             }
-            if !args.quiet {
+            if args.quiet {
+                println!("{quiet_response}");
+            } else {
                 println!("{}", json!({ "ok": false, "error": msg }));
             }
         }
@@ -251,6 +324,23 @@ fn read_stdin() -> Result<Value> {
         .read_to_string(&mut buf)
         .context("failed to read stdin")?;
     serde_json::from_str(&buf).context("failed to parse stdin as JSON")
+}
+
+/// Return the correct default JSON response for a Cursor hook event.
+/// Each hook type expects a specific format:
+///   preToolUse → {"permission":"allow"}
+///   beforeSubmitPrompt → {"continue":true}
+///   others → {}
+fn cursor_default_response(raw: &Value) -> Value {
+    let hook = raw
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match hook {
+        "preToolUse" | "PreToolUse" => json!({"permission": "allow"}),
+        "beforeSubmitPrompt" | "UserPromptSubmit" => json!({"continue": true}),
+        _ => json!({}),
+    }
 }
 
 fn event_to_submit_payload(event: &IngestEvent) -> Value {

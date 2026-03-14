@@ -4,6 +4,27 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.4.1] - 2026-03-14
+
+### Added
+- **Cursor IDE support**: `punkgo-jack setup cursor` / `unsetup cursor`
+- Dedicated `CursorAdapter` with Cursor-specific tool name mapping (`Shell`, `Delete`), metadata enrichment (`cursor_version`, `model`, `user_email`, `duration_ms`, `workspace`), and `conversation_id` normalization
+- Automatic source detection: `--actor cursor` vs `--actor claude-code` in presence/history/export
+- Cursor-compatible hook responses per event type (`permission`, `continue`)
+- `CURSOR_VERSION` env var detection for zero-overhead skip of claude-code hooks in Cursor environment
+- Empty stdin resilience for Cursor session events
+
+### Changed
+- `hook_events()` now accepts source parameter for per-tool hook commands
+- `--quiet` mode outputs typed JSON responses (Cursor requirement)
+- `--summary` omitted for Cursor hooks (Cursor treats stderr as error)
+- Presence footer simplified: removed "ask Claude" prompt
+- Help text updated with cursor support
+
+### Fixed
+- Submit errors now spill to spillover before returning (no data loss)
+- Error propagation from `run_inner` caught by wrapper (always exit 0 with valid JSON)
+
 ## [0.4.0] - 2026-03-13
 
 ### Changed

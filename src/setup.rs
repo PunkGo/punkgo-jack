@@ -14,9 +14,10 @@ fn is_punkgo_hook(cmd: &str) -> bool {
         || cmd.contains("punkgo-jack.exe\" ingest")
 }
 
-/// Build hook event definitions for the given executable path.
+/// Build hook event definitions for the given executable path and source name.
 /// The path is quoted to handle spaces in absolute paths (common on Windows).
-fn hook_events(exe: &str) -> Vec<(&'static str, String)> {
+/// Event names use Claude Code convention (PascalCase); callers convert if needed.
+fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, String)> {
     // Quote the exe path if it contains spaces.
     let exe_cmd = if exe.contains(' ') {
         format!("\"{exe}\"")
@@ -26,29 +27,34 @@ fn hook_events(exe: &str) -> Vec<(&'static str, String)> {
     vec![
         (
             "PreToolUse",
-            format!("{exe_cmd} ingest --source claude-code --quiet"),
+            format!("{exe_cmd} ingest --source {source} --quiet"),
         ),
         (
             "PostToolUse",
-            format!("{exe_cmd} ingest --source claude-code --quiet"),
+            format!("{exe_cmd} ingest --source {source} --quiet"),
         ),
         (
             "PostToolUseFailure",
-            format!("{exe_cmd} ingest --source claude-code --quiet"),
+            format!("{exe_cmd} ingest --source {source} --quiet"),
         ),
         (
             "UserPromptSubmit",
-            format!("{exe_cmd} ingest --source claude-code --quiet"),
+            format!("{exe_cmd} ingest --source {source} --quiet"),
         ),
         (
             "SessionStart",
-            format!("{exe_cmd} ingest --source claude-code --event-type session_start --quiet"),
+            format!("{exe_cmd} ingest --source {source} --event-type session_start --quiet"),
         ),
         (
             "SessionEnd",
-            format!(
-                "{exe_cmd} ingest --source claude-code --event-type session_end --quiet --summary"
-            ),
+            if source == "claude-code" {
+                format!(
+                    "{exe_cmd} ingest --source {source} --event-type session_end --quiet --summary"
+                )
+            } else {
+                // Cursor treats any stderr output as an error — omit --summary.
+                format!("{exe_cmd} ingest --source {source} --event-type session_end --quiet")
+            },
         ),
     ]
 }
@@ -57,11 +63,12 @@ fn hook_events(exe: &str) -> Vec<(&'static str, String)> {
 // setup
 // ---------------------------------------------------------------------------
 
-/// Install punkgo hooks into Claude Code settings.
+/// Install punkgo hooks into a supported tool's settings.
 pub fn run_setup(tool: &str) -> Result<()> {
     match tool {
         "claude-code" => setup_claude_code(),
-        other => bail!("unsupported tool: '{other}'. Supported: claude-code"),
+        "cursor" => setup_cursor(),
+        other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor"),
     }
 }
 
@@ -72,7 +79,7 @@ fn setup_claude_code() -> Result<()> {
     // Claude Code runs hooks via /usr/bin/bash — backslashes are interpreted
     // as escape sequences. Convert to forward slashes on Windows.
     let exe_str = exe_path.to_string_lossy().replace('\\', "/");
-    let events = hook_events(&exe_str);
+    let events = hook_events(&exe_str, "claude-code");
 
     let settings_path = claude_code_settings_path()?;
 
@@ -142,6 +149,134 @@ fn setup_claude_code() -> Result<()> {
 
     // Try to seed the actor so ingest works immediately.
     try_seed_actor("claude-code");
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cursor setup
+// ---------------------------------------------------------------------------
+
+/// Map Claude Code PascalCase event names to Cursor camelCase equivalents.
+fn cursor_event_name(claude_name: &str) -> &str {
+    match claude_name {
+        "PreToolUse" => "preToolUse",
+        "PostToolUse" => "postToolUse",
+        "PostToolUseFailure" => "postToolUseFailure",
+        "UserPromptSubmit" => "beforeSubmitPrompt",
+        "SessionStart" => "sessionStart",
+        "SessionEnd" => "sessionEnd",
+        other => other,
+    }
+}
+
+fn setup_cursor() -> Result<()> {
+    let exe_path =
+        std::env::current_exe().context("failed to determine punkgo-jack executable path")?;
+    // Cursor on Windows may execute hooks via WSL bash, which corrupts stdout.
+    // Keep native backslash paths so Cursor uses cmd.exe / direct execution.
+    let exe_str = exe_path.to_string_lossy().to_string();
+    let events = hook_events(&exe_str, "cursor");
+
+    // Warn if Claude Code hooks already exist — Cursor reads them automatically.
+    let claude_path = claude_code_settings_path()?;
+    if claude_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&claude_path) {
+            if content.contains("punkgo-jack") {
+                eprintln!(
+                    "IMPORTANT: Cursor also reads Claude Code hooks, causing duplicate execution."
+                );
+                eprintln!(
+                    "      Please disable: Cursor Settings → Features → Third-party skills → OFF"
+                );
+                eprintln!(
+                    "      This does NOT affect Claude Code — only stops Cursor from reading its hooks."
+                );
+            }
+        }
+    }
+
+    let hooks_path = cursor_hooks_path()?;
+
+    // Read existing hooks.json or start fresh.
+    let mut root = if hooks_path.exists() {
+        let content = std::fs::read_to_string(&hooks_path)
+            .with_context(|| format!("failed to read {}", hooks_path.display()))?;
+        serde_json::from_str::<Value>(&content)
+            .with_context(|| format!("failed to parse {}", hooks_path.display()))?
+    } else {
+        json!({ "version": 1, "hooks": {} })
+    };
+
+    let root_obj = root
+        .as_object_mut()
+        .context("hooks.json root must be a JSON object")?;
+
+    // Ensure version and hooks keys exist.
+    root_obj.entry("version").or_insert_with(|| json!(1));
+    root_obj.entry("hooks").or_insert_with(|| json!({}));
+
+    let hooks = root_obj
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .context("hooks.json 'hooks' must be a JSON object")?;
+
+    let mut installed = 0;
+    let mut skipped = 0;
+
+    for (claude_event, command) in &events {
+        let cursor_event = cursor_event_name(claude_event);
+
+        // Get or create the array for this event.
+        if !hooks.contains_key(cursor_event) {
+            hooks.insert(cursor_event.into(), json!([]));
+        }
+        let entries = hooks
+            .get_mut(cursor_event)
+            .and_then(Value::as_array_mut)
+            .expect("just ensured it's an array");
+
+        // Check if punkgo hook already present.
+        let already = entries.iter().any(|e| {
+            e.get("command")
+                .and_then(Value::as_str)
+                .is_some_and(is_punkgo_hook)
+        });
+
+        if already {
+            skipped += 1;
+        } else {
+            entries.push(json!({
+                "command": command,
+                "type": "command",
+                "timeout": 10
+            }));
+            installed += 1;
+        }
+    }
+
+    if installed > 0 {
+        if let Some(parent) = hooks_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let content =
+            serde_json::to_string_pretty(&root).context("failed to serialize hooks.json")?;
+        std::fs::write(&hooks_path, content.as_bytes())
+            .with_context(|| format!("failed to write {}", hooks_path.display()))?;
+    }
+
+    if installed > 0 {
+        eprintln!("hooks: {installed} installed into {}", hooks_path.display());
+    } else {
+        eprintln!("hooks: already installed ({skipped} skipped)");
+    }
+
+    // Detect and save punkgo-kerneld path for auto-start.
+    detect_and_save_kerneld();
+
+    // Seed the actor.
+    try_seed_actor("cursor");
 
     Ok(())
 }
@@ -725,12 +860,13 @@ pub fn toggle_statusline(on: bool) -> Result<()> {
 // unsetup
 // ---------------------------------------------------------------------------
 
-/// Remove punkgo hooks from Claude Code settings.
+/// Remove punkgo hooks from a supported tool's settings.
 /// If `purge` is true, also remove jack's local state files (sessions, daily energy, spillover, kerneld_path).
 pub fn run_unsetup(tool: &str, purge: bool) -> Result<()> {
     match tool {
         "claude-code" => unsetup_claude_code(purge),
-        other => bail!("unsupported tool: '{other}'. Supported: claude-code"),
+        "cursor" => unsetup_cursor(purge),
+        other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor"),
     }
 }
 
@@ -823,6 +959,74 @@ fn unsetup_claude_code(purge: bool) -> Result<()> {
     Ok(())
 }
 
+fn unsetup_cursor(purge: bool) -> Result<()> {
+    let hooks_path = cursor_hooks_path()?;
+
+    if !hooks_path.exists() {
+        debug!(path = %hooks_path.display(), "no hooks.json found, nothing to remove");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&hooks_path)
+        .with_context(|| format!("failed to read {}", hooks_path.display()))?;
+    let mut root: Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", hooks_path.display()))?;
+
+    let Some(hooks) = root
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("hooks"))
+        .and_then(Value::as_object_mut)
+    else {
+        debug!("no hooks section found, nothing to remove");
+        return Ok(());
+    };
+
+    let mut removed = 0;
+
+    // Cursor format: hooks are flat (no nested "hooks" array).
+    let event_keys: Vec<String> = hooks.keys().cloned().collect();
+    for key in &event_keys {
+        let Some(entries) = hooks.get_mut(key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let before = entries.len();
+        entries.retain(|entry| {
+            !entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(is_punkgo_hook)
+        });
+        removed += before - entries.len();
+    }
+
+    // Clean up empty arrays.
+    let empty_keys: Vec<String> = hooks
+        .iter()
+        .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for key in &empty_keys {
+        hooks.remove(key);
+    }
+
+    // Write back.
+    let content = serde_json::to_string_pretty(&root).context("failed to serialize hooks.json")?;
+    std::fs::write(&hooks_path, content.as_bytes())
+        .with_context(|| format!("failed to write {}", hooks_path.display()))?;
+
+    debug!(
+        removed,
+        path = %hooks_path.display(),
+        "unsetup cursor complete"
+    );
+
+    if purge {
+        purge_jack_state()?;
+    }
+
+    Ok(())
+}
+
 /// Remove jack's local state files (sessions, daily energy, spillover, kerneld_path).
 /// Does NOT touch kernel data (~/.punkgo/state/, ~/.punkgo/blobs/).
 fn purge_jack_state() -> Result<()> {
@@ -867,6 +1071,12 @@ fn claude_code_settings_path() -> Result<PathBuf> {
     let home = crate::session::home_dir()
         .context("cannot determine home directory. Set HOME (Unix) or USERPROFILE (Windows).")?;
     Ok(home.join(".claude").join("settings.json"))
+}
+
+fn cursor_hooks_path() -> Result<PathBuf> {
+    let home = crate::session::home_dir()
+        .context("cannot determine home directory. Set HOME (Unix) or USERPROFILE (Windows).")?;
+    Ok(home.join(".cursor").join("hooks.json"))
 }
 
 #[cfg(test)]
@@ -956,7 +1166,7 @@ mod tests {
         obj.insert("hooks".into(), json!({}));
         let hooks = obj["hooks"].as_object_mut().unwrap();
 
-        let events = hook_events("punkgo-jack");
+        let events = hook_events("punkgo-jack", "claude-code");
         for (event, cmd) in &events {
             merge_hook_entry(hooks, event, cmd);
         }
@@ -1051,10 +1261,10 @@ mod tests {
 
     #[test]
     fn hook_events_quotes_paths_with_spaces() {
-        let events = hook_events("/path/with spaces/punkgo-jack");
+        let events = hook_events("/path/with spaces/punkgo-jack", "claude-code");
         assert!(events[0].1.starts_with("\"/path/with spaces/punkgo-jack\""));
 
-        let events = hook_events("/simple/path/punkgo-jack");
+        let events = hook_events("/simple/path/punkgo-jack", "claude-code");
         assert!(events[0].1.starts_with("/simple/path/punkgo-jack "));
     }
 
@@ -1071,7 +1281,7 @@ mod tests {
         obj.insert("hooks".into(), json!({}));
         let hooks = obj["hooks"].as_object_mut().unwrap();
 
-        let events = hook_events("punkgo-jack");
+        let events = hook_events("punkgo-jack", "claude-code");
         for (event, cmd) in &events {
             merge_hook_entry(hooks, event, cmd);
         }

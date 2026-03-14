@@ -1,4 +1,5 @@
 pub mod claude_code;
+pub mod cursor;
 
 use std::collections::BTreeMap;
 
@@ -32,6 +33,7 @@ pub trait HookAdapter: Send + Sync {
 pub fn adapter_for_source(source: &str) -> Option<Box<dyn HookAdapter>> {
     match source {
         "claude-code" => Some(Box::new(claude_code::ClaudeCodeAdapter)),
+        "cursor" => Some(Box::new(cursor::CursorAdapter)),
         _ => None,
     }
 }

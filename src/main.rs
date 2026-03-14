@@ -50,7 +50,7 @@ fn print_usage() {
          \x20 receipt [SESSION_ID]    Generate session receipt\n\
          \x20 report [SESSION_ID]     Generate turn-based session report\n\
          \x20 presence [DAYS]         Show collaboration heatmap (default: 14 days)\n\
-         \x20 statusline on|off       Toggle energy display in Claude Code statusline\n\
+         \x20 statusline on|off       Toggle energy statusline (Claude Code only)\n\
          \x20 verify <EVENT_ID>       Verify Merkle inclusion proof offline\n\
          \x20 upgrade                 Check for updates and upgrade\n\
          \x20 flush                   Replay spillover events to kernel\n\
@@ -68,7 +68,7 @@ fn print_usage() {
          \x20 --actor <ID>            Filter by actor (default: from session, or all)\n\
          \n\
          Ingest options:\n\
-         \x20 --source <NAME>         Data source (required: claude-code)\n\
+         \x20 --source <NAME>         Data source (claude-code, cursor)\n\
          \x20 --event-type <TYPE>     Override adapter-derived event type\n\
          \x20 --endpoint <ENDPOINT>   Override daemon endpoint\n\
          \x20 --dry-run               Parse and transform only, do not write\n\
@@ -77,7 +77,8 @@ fn print_usage() {
          \x20 --summary               Print session summary on session_end\n\
          \n\
          Supported tools:\n\
-         \x20 claude-code             Claude Code hooks (PostToolUse, SessionStart, etc.)\n\
+         \x20 claude-code             Claude Code hooks\n\
+         \x20 cursor                  Cursor IDE hooks\n\
          \n\
          Environment:\n\
          \x20 PUNKGO_DAEMON_ENDPOINT  Override daemon IPC endpoint\n"

@@ -27,8 +27,9 @@ cargo install punkgo-jack && cargo install punkgo-kernel
 ```
 
 ```bash
-punkgo-jack setup claude-code
-# That's it. Your next Claude Code session is already being recorded.
+punkgo-jack setup claude-code   # Claude Code
+punkgo-jack setup cursor        # Cursor IDE
+# That's it. Your next session is already being recorded.
 ```
 
 **Upgrade**: `punkgo-jack upgrade` — auto-detects cargo or install script, no re-setup needed.
@@ -81,9 +82,10 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 
 | Agent | Status | Integration |
 |-------|--------|-------------|
-| **Claude Code** (Terminal + VSCode) | Supported | 6 hooks — zero friction, fully automatic |
+| **Claude Code** (Terminal + VSCode) | Supported | `setup claude-code` — 6 hooks, fully automatic |
+| **Cursor** | Supported | `setup cursor` — dedicated adapter, auto-detects source |
 | **Custom agents** | Via MCP | Use `punkgo_log` tool directly |
-| Cursor, Windsurf, Aider | Planned | — |
+| Windsurf, Cline, Aider | Planned | — |
 
 ## Requirements
 
@@ -105,7 +107,8 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 | Command | What it does |
 |---------|-------------|
 | `setup claude-code` | Install hooks + statusline + kernel detection |
-| `unsetup claude-code [--purge]` | Remove hooks. `--purge` also clears local state |
+| `setup cursor` | Install Cursor IDE hooks with dedicated adapter |
+| `unsetup <tool> [--purge]` | Remove hooks. `--purge` also clears local state |
 | `history [--actor ID]` | Recent events in a table |
 | `show <EVENT_ID> [--json]` | Full event details + Merkle inclusion proof |
 | `show --checkpoint` | Print C2SP tlog-checkpoint |
@@ -114,7 +117,7 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 | `receipt [SESSION]` | Session receipt with consistency proof |
 | `report [SESSION]` | Turn-based session report |
 | `presence [DAYS]` | Energy heatmap (default: 14 days) |
-| `statusline on\|off` | Toggle energy display in Claude Code statusline |
+| `statusline on\|off` | Toggle energy statusline (Claude Code only) |
 | `serve` | Start MCP server (7 tools for agent self-query) |
 | `upgrade` | Check for updates and self-upgrade |
 | `flush` | Replay buffered events to kernel |

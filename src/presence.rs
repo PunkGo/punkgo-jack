@@ -280,7 +280,9 @@ fn render(rows: &[DayRow], stats: &Stats) {
         stats.total_sessions, stats.peak_hour_label, stats.total_days,
     );
     println!();
-    println!("  \x1b[38;5;240mRun \x1b[0mpunkgo-jack presence\x1b[38;5;240m or ask Claude \x1b[0m\"show my punkgo\"\x1b[38;5;240m to see this again.\x1b[0m");
+    println!(
+        "  \x1b[38;5;240mRun \x1b[0mpunkgo-jack presence\x1b[38;5;240m to see this again.\x1b[0m"
+    );
     println!();
 }
 
