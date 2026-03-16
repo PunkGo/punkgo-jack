@@ -12,12 +12,16 @@ fn is_punkgo_hook(cmd: &str) -> bool {
         || cmd.contains("punkgo-jack.exe ingest")
         || cmd.contains("punkgo-jack\" ingest")
         || cmd.contains("punkgo-jack.exe\" ingest")
+        || cmd.contains("punkgo-jack anchor")
+        || cmd.contains("punkgo-jack.exe anchor")
+        || cmd.contains("punkgo-jack\" anchor")
+        || cmd.contains("punkgo-jack.exe\" anchor")
 }
 
 /// Build hook event definitions for the given executable path and source name.
 /// The path is quoted to handle spaces in absolute paths (common on Windows).
 /// Event names use Claude Code convention (PascalCase); callers convert if needed.
-fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, String)> {
+fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, Vec<String>)> {
     // Quote the exe path if it contains spaces.
     let exe_cmd = if exe.contains(' ') {
         format!("\"{exe}\"")
@@ -27,34 +31,39 @@ fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, String)> {
     vec![
         (
             "PreToolUse",
-            format!("{exe_cmd} ingest --source {source} --quiet"),
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
         ),
         (
             "PostToolUse",
-            format!("{exe_cmd} ingest --source {source} --quiet"),
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
         ),
         (
             "PostToolUseFailure",
-            format!("{exe_cmd} ingest --source {source} --quiet"),
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
         ),
         (
             "UserPromptSubmit",
-            format!("{exe_cmd} ingest --source {source} --quiet"),
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
         ),
         (
             "SessionStart",
-            format!("{exe_cmd} ingest --source {source} --event-type session_start --quiet"),
+            vec![
+                format!("{exe_cmd} ingest --source {source} --event-type session_start --quiet"),
+                format!("{exe_cmd} anchor --stale-only --quiet"),
+            ],
         ),
         (
             "SessionEnd",
-            if source == "claude-code" {
-                format!(
-                    "{exe_cmd} ingest --source {source} --event-type session_end --quiet --summary"
-                )
-            } else {
-                // Cursor treats any stderr output as an error — omit --summary.
-                format!("{exe_cmd} ingest --source {source} --event-type session_end --quiet")
-            },
+            vec![
+                if source == "claude-code" {
+                    format!(
+                        "{exe_cmd} ingest --source {source} --event-type session_end --quiet --summary"
+                    )
+                } else {
+                    format!("{exe_cmd} ingest --source {source} --event-type session_end --quiet")
+                },
+                format!("{exe_cmd} anchor --quiet"),
+            ],
         ),
     ]
 }
@@ -109,8 +118,8 @@ fn setup_claude_code() -> Result<()> {
     let mut installed = 0;
     let mut skipped = 0;
 
-    for (event_name, command) in &events {
-        if merge_hook_entry(hooks, event_name, command) {
+    for (event_name, commands) in &events {
+        if merge_hook_entry(hooks, event_name, commands) {
             installed += 1;
         } else {
             skipped += 1;
@@ -219,7 +228,7 @@ fn setup_cursor() -> Result<()> {
     let mut installed = 0;
     let mut skipped = 0;
 
-    for (claude_event, command) in &events {
+    for (claude_event, commands) in &events {
         let cursor_event = cursor_event_name(claude_event);
 
         // Get or create the array for this event.
@@ -241,11 +250,14 @@ fn setup_cursor() -> Result<()> {
         if already {
             skipped += 1;
         } else {
-            entries.push(json!({
-                "command": command,
-                "type": "command",
-                "timeout": 10
-            }));
+            // Cursor hooks: each command is a separate entry (flat format).
+            for cmd in commands {
+                entries.push(json!({
+                    "command": cmd,
+                    "type": "command",
+                    "timeout": 10
+                }));
+            }
             installed += 1;
         }
     }
@@ -276,9 +288,10 @@ fn setup_cursor() -> Result<()> {
     Ok(())
 }
 
-/// Merge a single hook entry into the hooks object.
+/// Merge hook commands into the hooks object for a given event.
+/// Each event gets one entry with multiple commands in its `hooks` array.
 /// Returns true if a new entry was added, false if already present.
-fn merge_hook_entry(hooks: &mut Map<String, Value>, event_name: &str, command: &str) -> bool {
+fn merge_hook_entry(hooks: &mut Map<String, Value>, event_name: &str, commands: &[String]) -> bool {
     // Get or create the array for this event.
     if !hooks.contains_key(event_name) {
         hooks.insert(event_name.into(), json!([]));
@@ -307,17 +320,22 @@ fn merge_hook_entry(hooks: &mut Map<String, Value>, event_name: &str, command: &
         return false;
     }
 
-    // Add new entry.
-    entries.push(json!({
-        "matcher": ".*",
-        "hooks": [
-            {
+    // Build hooks array with all commands for this event.
+    let hook_items: Vec<Value> = commands
+        .iter()
+        .map(|cmd| {
+            json!({
                 "type": "command",
-                "command": command,
+                "command": cmd,
                 "timeout": 10,
                 "async": true
-            }
-        ]
+            })
+        })
+        .collect();
+
+    entries.push(json!({
+        "matcher": ".*",
+        "hooks": hook_items
     }));
 
     true
@@ -1082,32 +1100,24 @@ mod tests {
     #[test]
     fn merge_hook_entry_adds_new() {
         let mut hooks = Map::new();
-        let added = merge_hook_entry(
-            &mut hooks,
-            "PostToolUse",
-            "punkgo-jack ingest --source claude-code --quiet",
-        );
+        let cmds = vec!["punkgo-jack ingest --source claude-code --quiet".to_string()];
+        let added = merge_hook_entry(&mut hooks, "PostToolUse", &cmds);
         assert!(added);
         assert!(hooks.contains_key("PostToolUse"));
 
         let entries = hooks["PostToolUse"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["matcher"], ".*");
+        // Single command in hooks array
+        assert_eq!(entries[0]["hooks"].as_array().unwrap().len(), 1);
     }
 
     #[test]
     fn merge_hook_entry_skips_duplicate() {
         let mut hooks = Map::new();
-        merge_hook_entry(
-            &mut hooks,
-            "PostToolUse",
-            "punkgo-jack ingest --source claude-code --quiet",
-        );
-        let added_again = merge_hook_entry(
-            &mut hooks,
-            "PostToolUse",
-            "punkgo-jack ingest --source claude-code --quiet",
-        );
+        let cmds = vec!["punkgo-jack ingest --source claude-code --quiet".to_string()];
+        merge_hook_entry(&mut hooks, "PostToolUse", &cmds);
+        let added_again = merge_hook_entry(&mut hooks, "PostToolUse", &cmds);
         assert!(!added_again);
 
         let entries = hooks["PostToolUse"].as_array().unwrap();
@@ -1128,15 +1138,31 @@ mod tests {
             ]),
         );
 
-        let added = merge_hook_entry(
-            &mut hooks,
-            "PostToolUse",
-            "punkgo-jack ingest --source claude-code --quiet",
-        );
+        let cmds = vec!["punkgo-jack ingest --source claude-code --quiet".to_string()];
+        let added = merge_hook_entry(&mut hooks, "PostToolUse", &cmds);
         assert!(added);
 
         let entries = hooks["PostToolUse"].as_array().unwrap();
         assert_eq!(entries.len(), 2); // User hook + punkgo hook.
+    }
+
+    #[test]
+    fn merge_multi_command_entry() {
+        let mut hooks = Map::new();
+        let cmds = vec![
+            "punkgo-jack ingest --source claude-code --quiet".to_string(),
+            "punkgo-jack anchor --quiet".to_string(),
+        ];
+        let added = merge_hook_entry(&mut hooks, "SessionEnd", &cmds);
+        assert!(added);
+
+        let entries = hooks["SessionEnd"].as_array().unwrap();
+        assert_eq!(entries.len(), 1); // One entry
+        // Two commands in the hooks array
+        let inner = entries[0]["hooks"].as_array().unwrap();
+        assert_eq!(inner.len(), 2);
+        assert!(inner[0]["command"].as_str().unwrap().contains("ingest"));
+        assert!(inner[1]["command"].as_str().unwrap().contains("anchor"));
     }
 
     #[test]
@@ -1162,8 +1188,8 @@ mod tests {
         let hooks = obj["hooks"].as_object_mut().unwrap();
 
         let events = hook_events("punkgo-jack", "claude-code");
-        for (event, cmd) in &events {
-            merge_hook_entry(hooks, event, cmd);
+        for (event, cmds) in &events {
+            merge_hook_entry(hooks, event, cmds);
         }
         std::fs::write(
             &settings_path,
@@ -1175,7 +1201,15 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 6);
+        assert_eq!(hooks.len(), 6); // 6 unique event names
+        // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
+        let se = hooks["SessionEnd"].as_array().unwrap();
+        assert_eq!(se.len(), 1);
+        assert_eq!(se[0]["hooks"].as_array().unwrap().len(), 2);
+        // SessionStart has 1 entry with 2 inner hooks (ingest + anchor).
+        let ss = hooks["SessionStart"].as_array().unwrap();
+        assert_eq!(ss.len(), 1);
+        assert_eq!(ss[0]["hooks"].as_array().unwrap().len(), 2);
         // Pre-existing config preserved.
         assert!(settings["permissions"]["allow"].is_array());
 
@@ -1257,10 +1291,10 @@ mod tests {
     #[test]
     fn hook_events_quotes_paths_with_spaces() {
         let events = hook_events("/path/with spaces/punkgo-jack", "claude-code");
-        assert!(events[0].1.starts_with("\"/path/with spaces/punkgo-jack\""));
+        assert!(events[0].1[0].starts_with("\"/path/with spaces/punkgo-jack\""));
 
         let events = hook_events("/simple/path/punkgo-jack", "claude-code");
-        assert!(events[0].1.starts_with("/simple/path/punkgo-jack "));
+        assert!(events[0].1[0].starts_with("/simple/path/punkgo-jack "));
     }
 
     #[test]
@@ -1277,8 +1311,8 @@ mod tests {
         let hooks = obj["hooks"].as_object_mut().unwrap();
 
         let events = hook_events("punkgo-jack", "claude-code");
-        for (event, cmd) in &events {
-            merge_hook_entry(hooks, event, cmd);
+        for (event, cmds) in &events {
+            merge_hook_entry(hooks, event, cmds);
         }
 
         std::fs::write(
@@ -1290,12 +1324,15 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 6);
+        assert_eq!(hooks.len(), 6); // 6 unique event names
         assert!(hooks.contains_key("PreToolUse"));
         assert!(hooks.contains_key("PostToolUse"));
         assert!(hooks.contains_key("PostToolUseFailure"));
         assert!(hooks.contains_key("UserPromptSubmit"));
         assert!(hooks.contains_key("SessionStart"));
         assert!(hooks.contains_key("SessionEnd"));
+        // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
+        assert_eq!(hooks["SessionEnd"].as_array().unwrap()[0]["hooks"].as_array().unwrap().len(), 2);
+        assert_eq!(hooks["SessionStart"].as_array().unwrap()[0]["hooks"].as_array().unwrap().len(), 2);
     }
 }

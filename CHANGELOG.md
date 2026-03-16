@@ -4,6 +4,27 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.5.0] - 2026-03-16
+
+### Added
+
+- **RFC 3161 TSA anchoring** — `punkgo-jack anchor` command submits Merkle checkpoint root hash to a timestamp authority (default: DigiCert). Proves "this checkpoint existed before time T"
+- **TSA response validation** — full RFC 3161 parsing via `x509-tsp`: PKIStatus check, hash cross-verification, genTime extraction
+- **`verify-tsr` command** — standalone TSA token verification: `punkgo-jack verify-tsr <tree_size>`
+- **TSA status in `verify`** — Merkle verification now automatically shows TSA anchor status when a TSR file exists
+- **TSA status in `receipt`** — session receipts show anchor timestamp, searches for nearest covering checkpoint
+- **`~/.punkgo/config.toml`** — first configuration file for jack. TSA is opt-in: `[tsa] enabled = true`
+- **Configuration layer model** — env vars override config file override defaults (`PUNKGO_TSA_ENABLED`, `PUNKGO_TSA_URL`, etc.)
+- **Rate limiting** — configurable minimum interval between TSA submissions (default: 5 min, set to 0 for CI)
+- **Session crash recovery** — `anchor --stale-only` registered on SessionStart hook catches un-anchored checkpoints from crashed sessions
+- **Hook multi-command support** — SessionEnd and SessionStart hooks now register both `ingest` and `anchor` commands
+- **DigiCert TSR fixture test** — end-to-end validation with a real RFC 3161 response from DigiCert TSA
+
+### Dependencies
+
+- Added: `ureq` v2 (sync HTTP), `toml` v0.8, `x509-tsp` v0.1, `cms` v0.2, `der` v0.7, `spki` v0.7, `const-oid` v0.9
+- Updated: `punkgo-core` 0.4.0 → 0.5.0
+
 ## [0.4.2] - 2026-03-15
 
 ### Changed

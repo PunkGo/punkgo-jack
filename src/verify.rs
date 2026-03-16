@@ -135,6 +135,9 @@ pub fn run_verify(args: VerifyArgs) -> Result<()> {
         }
     }
 
+    // TSA verification: check if a TSR file exists for this tree_size.
+    print_tsa_status(tree_size as i64, checkpoint_root_hex);
+
     Ok(())
 }
 
@@ -282,17 +285,90 @@ fn hex_to_tlog_hash(hex_str: &str) -> Result<tlog::Hash> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if !s.len().is_multiple_of(2) {
-        return Err("odd length".into());
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
-        .collect()
+    crate::tsa_verify::hex_decode(s)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::tsa_verify::hex_encode(bytes)
+}
+
+// ─── TSA verification ──────────────────────────────────────────────
+
+/// Display TSA anchor status for a given tree_size.
+fn print_tsa_status(tree_size: i64, checkpoint_root_hex: Option<&str>) {
+    let Some(tsr_path) = crate::config::tsr_path(tree_size) else {
+        println!("TSA:        not configured");
+        return;
+    };
+
+    if !tsr_path.exists() {
+        println!("TSA:        not anchored (no TSR for tree_size={tree_size})");
+        return;
+    }
+
+    let tsr_bytes = match std::fs::read(&tsr_path) {
+        Ok(b) => b,
+        Err(e) => {
+            println!("TSA:        \u{2717} FAILED to read TSR \u{2014} {e}");
+            return;
+        }
+    };
+
+    let expected_hash = checkpoint_root_hex.and_then(|h| {
+        crate::tsa_verify::hex_decode(h).ok()
+    });
+
+    match crate::tsa_verify::verify_tsr(&tsr_bytes, expected_hash.as_deref()) {
+        Ok(info) => {
+            println!("TSA:        \u{2713} ANCHORED at {}", info.gen_time);
+            println!("TSR file:   {}", tsr_path.display());
+        }
+        Err(e) => {
+            println!("TSA:        \u{2717} INVALID \u{2014} {e}");
+            println!("TSR file:   {}", tsr_path.display());
+        }
+    }
+}
+
+/// Standalone `verify-tsr` command: verify a specific TSR file or tree_size.
+pub fn run_verify_tsr(args: &mut impl Iterator<Item = String>) -> Result<()> {
+    let arg = args
+        .next()
+        .context("usage: punkgo-jack verify-tsr <tree_size> or punkgo-jack verify-tsr --file <path>")?;
+
+    let tsr_path = if arg == "--file" || arg == "-f" {
+        let path = args.next().context("--file requires a path")?;
+        std::path::PathBuf::from(path)
+    } else {
+        let tree_size: i64 = arg
+            .parse()
+            .context("expected tree_size (integer) or --file <path>")?;
+        crate::config::tsr_path(tree_size).context("failed to determine TSR path")?
+    };
+
+    if !tsr_path.exists() {
+        bail!("TSR file not found: {}", tsr_path.display());
+    }
+
+    let tsr_bytes = std::fs::read(&tsr_path)
+        .with_context(|| format!("failed to read {}", tsr_path.display()))?;
+
+    println!("TSR file:   {}", tsr_path.display());
+
+    match crate::tsa_verify::verify_tsr(&tsr_bytes, None) {
+        Ok(info) => {
+            println!("Status:     \u{2713} VALID");
+            println!("Timestamp:  {}", info.gen_time);
+            println!("Hash:       {}", crate::tsa_verify::hex_encode(&info.message_hash));
+            println!("Protocol:   RFC 3161");
+        }
+        Err(e) => {
+            println!("Status:     \u{2717} INVALID \u{2014} {e}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

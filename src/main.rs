@@ -1,8 +1,10 @@
 mod adapters;
+mod anchor;
 #[cfg(feature = "rebuild-audit")]
 mod audit_rebuild;
 mod backend;
 mod blob;
+mod config;
 mod daemon;
 mod export;
 mod history;
@@ -15,6 +17,7 @@ mod session;
 mod setup;
 mod spillover;
 mod tools;
+mod tsa_verify;
 mod upgrade;
 mod verify;
 
@@ -51,7 +54,9 @@ fn print_usage() {
          \x20 report [SESSION_ID]     Generate turn-based session report\n\
          \x20 presence [DAYS]         Show collaboration heatmap (default: 14 days)\n\
          \x20 statusline on|off       Toggle energy statusline (Claude Code only)\n\
+         \x20 anchor [OPTIONS]        Anchor latest checkpoint to TSA\n\
          \x20 verify <EVENT_ID>       Verify Merkle inclusion proof offline\n\
+         \x20 verify-tsr <TREE_SIZE>  Verify a stored TSA timestamp token\n\
          \x20 upgrade                 Check for updates and upgrade\n\
          \x20 flush                   Replay spillover events to kernel\n\
          \x20 rebuild-audit           Rebuild Merkle tree from event hashes\n\
@@ -108,7 +113,9 @@ fn main() {
         "report" => run_report(&mut args),
         "presence" => run_presence(&mut args),
         "statusline" => run_statusline(&mut args),
+        "anchor" => anchor::run_anchor(&mut args),
         "verify" => run_verify(&mut args),
+        "verify-tsr" => verify::run_verify_tsr(&mut args),
         "upgrade" => upgrade::run_upgrade(),
         "flush" => spillover::flush(),
         #[cfg(feature = "rebuild-audit")]

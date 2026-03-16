@@ -76,7 +76,7 @@ See [`examples/verify-go/`](examples/verify-go/) for the full cross-verification
 
 How the proof works under the hood → [punkgo-kernel audit trail](https://github.com/PunkGo/punkgo-kernel#audit-trail)
 
-> **Trust model**: Checkpoints are currently unsigned. The Merkle tree guarantees append-only integrity and inclusion proofs are independently verifiable, but checkpoint authenticity relies on local trust. Signed checkpoints are planned for multi-party scenarios.
+> **Trust model**: Checkpoints are Ed25519-signed (identity binding) and optionally timestamped via RFC 3161 TSA (time binding). Enable TSA with `[tsa] enabled = true` in `~/.punkgo/config.toml`. See [PIP-003](https://github.com/PunkGo/punkgo-kernel/blob/main/docs/PIP-003_EN.md) for the full trust layer architecture.
 
 ## Supported Agents
 
@@ -113,8 +113,10 @@ How the proof works under the hood → [punkgo-kernel audit trail](https://githu
 | `history [--actor ID]` | Recent events in a table |
 | `show <EVENT_ID> [--json]` | Full event details + Merkle inclusion proof |
 | `show --checkpoint` | Print C2SP tlog-checkpoint |
-| `verify <EVENT_ID>` | Offline Merkle proof verification |
+| `anchor [--quiet]` | Anchor latest checkpoint to RFC 3161 TSA |
+| `verify <EVENT_ID>` | Offline Merkle proof verification + TSA status |
 | `verify --file proof.json` | Fully offline verification from exported JSON |
+| `verify-tsr <TREE_SIZE>` | Verify a stored TSA timestamp token |
 | `receipt [SESSION]` | Session receipt with consistency proof |
 | `report [SESSION]` | Turn-based session report |
 | `presence [DAYS]` | Energy heatmap (default: 14 days) |
@@ -176,6 +178,10 @@ The statusline shows `punkgo:⚡N` — your daily cumulative energy across all s
 | `PUNKGO_DATA_DIR` | `~/.punkgo` |
 | `PUNKGO_STATE_DIR` | `~/.punkgo/state` |
 | `PUNKGO_CAPTURE_RESPONSE` | `summary` (options: `full`, `summary`, `none`) |
+| `PUNKGO_TSA_ENABLED` | `false` (set `true` to enable RFC 3161 anchoring) |
+| `PUNKGO_TSA_URL` | `http://timestamp.digicert.com` |
+| `PUNKGO_TSA_TIMEOUT_SECS` | `10` |
+| `PUNKGO_TSA_MIN_INTERVAL_SECS` | `300` (set `0` for CI burst mode) |
 
 ## Build from Source
 

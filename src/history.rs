@@ -458,6 +458,9 @@ pub fn run_receipt(args: ReceiptArgs) -> Result<()> {
     if !consistency_status.is_empty() {
         println!("Audit:    {consistency_status}");
     }
+    // TSA anchor status: find the nearest anchored checkpoint at or above this tree_size.
+    // The anchor may cover an earlier checkpoint that includes this session's events.
+    print_receipt_tsa_status(tree_size);
     println!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}");
     println!();
 
@@ -533,6 +536,57 @@ pub fn parse_receipt_args(args: &mut impl Iterator<Item = String>) -> Result<Rec
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Find and display TSA anchor status for a receipt.
+/// Scans TSR files to find one covering the given tree_size (exact or nearest above).
+fn print_receipt_tsa_status(tree_size: u64) {
+    let Some(tsa_dir) = crate::config::tsa_state_dir() else {
+        return;
+    };
+    if !tsa_dir.exists() {
+        println!("TSA:      not configured");
+        return;
+    }
+
+    // Scan TSR files: find the smallest tree_size >= current tree_size.
+    let mut best: Option<(i64, std::path::PathBuf)> = None;
+    if let Ok(entries) = std::fs::read_dir(&tsa_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(stem) = name_str.strip_suffix(".tsr") {
+                if let Ok(ts) = stem.parse::<i64>() {
+                    if ts >= tree_size as i64
+                        && best.as_ref().is_none_or(|(b, _)| ts < *b)
+                    {
+                        best = Some((ts, entry.path()));
+                    }
+                }
+            }
+        }
+    }
+
+    match best {
+        Some((ts, path)) => {
+            if let Ok(tsr_bytes) = std::fs::read(&path) {
+                match crate::tsa_verify::verify_tsr(&tsr_bytes, None) {
+                    Ok(info) => {
+                        if ts == tree_size as i64 {
+                            println!("TSA:      \u{2713} anchored at {}", info.gen_time);
+                        } else {
+                            println!(
+                                "TSA:      \u{2713} covered by anchor at tree_size={ts} ({})",
+                                info.gen_time
+                            );
+                        }
+                    }
+                    Err(_) => println!("TSA:      \u{2717} invalid TSR at {}", path.display()),
+                }
+            }
+        }
+        None => println!("TSA:      not anchored"),
+    }
+}
 
 fn parse_event_timestamp_ms(event: &Value) -> Option<u64> {
     // Prefer client_timestamp (when the event actually occurred) over kernel
