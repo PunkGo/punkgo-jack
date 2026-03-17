@@ -100,15 +100,14 @@ pub fn do_anchor(config: &Config) -> Result<Option<AnchorReceipt>> {
     let client = IpcClient::from_env(None);
     let (tree_size, root_hash) = fetch_checkpoint(&client)?;
 
-    let tsr_path = config::tsr_path(tree_size)
-        .context("failed to determine TSR storage path")?;
+    let tsr_path = config::tsr_path(tree_size).context("failed to determine TSR storage path")?;
     if tsr_path.exists() {
         debug!(tree_size, "already anchored");
         return Ok(None);
     }
 
-    let hash_bytes = tsa_verify::hex_to_32bytes(&root_hash)
-        .context("invalid root_hash hex from checkpoint")?;
+    let hash_bytes =
+        tsa_verify::hex_to_32bytes(&root_hash).context("invalid root_hash hex from checkpoint")?;
     let tsq = build_timestamp_req(&hash_bytes)?;
 
     info!(url = %config.tsa.url, tree_size, "submitting to TSA");
@@ -145,8 +144,7 @@ fn needs_anchor() -> Result<bool> {
         Ok(v) => v,
         Err(_) => return Ok(false),
     };
-    let tsr_path = config::tsr_path(tree_size)
-        .context("failed to determine TSR path")?;
+    let tsr_path = config::tsr_path(tree_size).context("failed to determine TSR path")?;
     Ok(!tsr_path.exists())
 }
 
@@ -162,10 +160,14 @@ fn fetch_checkpoint(client: &IpcClient) -> Result<(i64, String)> {
     if resp.status != "ok" {
         anyhow::bail!("kernel returned error: {}", resp.payload);
     }
-    let tree_size = resp.payload.get("tree_size")
+    let tree_size = resp
+        .payload
+        .get("tree_size")
         .and_then(|v| v.as_i64())
         .context("missing tree_size in checkpoint response")?;
-    let root_hash = resp.payload.get("root_hash")
+    let root_hash = resp
+        .payload
+        .get("root_hash")
         .and_then(|v| v.as_str())
         .context("missing root_hash in checkpoint response")?
         .to_string();

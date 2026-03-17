@@ -314,9 +314,7 @@ fn print_tsa_status(tree_size: i64, checkpoint_root_hex: Option<&str>) {
         }
     };
 
-    let expected_hash = checkpoint_root_hex.and_then(|h| {
-        crate::tsa_verify::hex_decode(h).ok()
-    });
+    let expected_hash = checkpoint_root_hex.and_then(|h| crate::tsa_verify::hex_decode(h).ok());
 
     match crate::tsa_verify::verify_tsr(&tsr_bytes, expected_hash.as_deref()) {
         Ok(info) => {
@@ -332,9 +330,9 @@ fn print_tsa_status(tree_size: i64, checkpoint_root_hex: Option<&str>) {
 
 /// Standalone `verify-tsr` command: verify a specific TSR file or tree_size.
 pub fn run_verify_tsr(args: &mut impl Iterator<Item = String>) -> Result<()> {
-    let arg = args
-        .next()
-        .context("usage: punkgo-jack verify-tsr <tree_size> or punkgo-jack verify-tsr --file <path>")?;
+    let arg = args.next().context(
+        "usage: punkgo-jack verify-tsr <tree_size> or punkgo-jack verify-tsr --file <path>",
+    )?;
 
     let tsr_path = if arg == "--file" || arg == "-f" {
         let path = args.next().context("--file requires a path")?;
@@ -359,7 +357,10 @@ pub fn run_verify_tsr(args: &mut impl Iterator<Item = String>) -> Result<()> {
         Ok(info) => {
             println!("Status:     \u{2713} VALID");
             println!("Timestamp:  {}", info.gen_time);
-            println!("Hash:       {}", crate::tsa_verify::hex_encode(&info.message_hash));
+            println!(
+                "Hash:       {}",
+                crate::tsa_verify::hex_encode(&info.message_hash)
+            );
             println!("Protocol:   RFC 3161");
         }
         Err(e) => {

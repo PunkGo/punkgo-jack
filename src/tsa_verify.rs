@@ -56,8 +56,7 @@ pub fn verify_tsr(tsr_bytes: &[u8], expected_hash: Option<&[u8]>) -> Result<TsrI
     let token_der = token
         .to_der()
         .context("failed to re-encode TimeStampToken")?;
-    let content_info =
-        ContentInfo::from_der(&token_der).context("failed to parse ContentInfo")?;
+    let content_info = ContentInfo::from_der(&token_der).context("failed to parse ContentInfo")?;
     let signed_data = content_info
         .content
         .decode_as::<SignedData>()
@@ -66,8 +65,7 @@ pub fn verify_tsr(tsr_bytes: &[u8], expected_hash: Option<&[u8]>) -> Result<TsrI
         .encap_content_info
         .econtent
         .context("SignedData has no encapsulated content")?;
-    let tst_info =
-        x509_tsp::TstInfo::from_der(encap.value()).context("failed to parse TstInfo")?;
+    let tst_info = x509_tsp::TstInfo::from_der(encap.value()).context("failed to parse TstInfo")?;
 
     // Extract message hash
     let message_hash = tst_info.message_imprint.hashed_message.as_bytes().to_vec();
@@ -140,7 +138,10 @@ mod tests {
 
     #[test]
     fn hex_decode_works() {
-        assert_eq!(hex_decode("deadbeef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            hex_decode("deadbeef").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
     }
 
     #[test]
@@ -177,7 +178,11 @@ mod tests {
         let info = verify_tsr(tsr_bytes, Some(&expected_hash)).unwrap();
 
         // genTime should be a valid formatted timestamp
-        assert!(info.gen_time.contains("UTC"), "genTime should contain UTC: {}", info.gen_time);
+        assert!(
+            info.gen_time.contains("UTC"),
+            "genTime should contain UTC: {}",
+            info.gen_time
+        );
         // Hash should match what we submitted
         assert_eq!(info.message_hash, expected_hash.to_vec());
     }
@@ -189,7 +194,10 @@ mod tests {
         let result = verify_tsr(tsr_bytes, Some(&wrong_hash));
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("mismatch"), "error should mention mismatch: {err_msg}");
+        assert!(
+            err_msg.contains("mismatch"),
+            "error should mention mismatch: {err_msg}"
+        );
     }
 
     #[test]

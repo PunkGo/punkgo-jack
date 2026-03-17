@@ -5,7 +5,20 @@ set -euo pipefail
 
 JACK_REPO="PunkGo/punkgo-jack"
 KERNEL_REPO="PunkGo/punkgo-kernel"
-INSTALL_DIR="${PUNKGO_INSTALL_DIR:-/usr/local/bin}"
+
+# Default install directory: platform-aware.
+if [ -z "${PUNKGO_INSTALL_DIR:-}" ]; then
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Windows: install to ~/.punkgo/bin/ (always writable, no sudo).
+      # Use $HOME (POSIX path, consistent with Git Bash $PATH format).
+      INSTALL_DIR="$HOME/.punkgo/bin" ;;
+    *)
+      INSTALL_DIR="/usr/local/bin" ;;
+  esac
+else
+  INSTALL_DIR="$PUNKGO_INSTALL_DIR"
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -91,14 +104,15 @@ install_binary() {
     return 1
   fi
 
-  # Install
+  # Install — ensure target dir exists.
+  mkdir -p "$INSTALL_DIR"
   if [ -w "$INSTALL_DIR" ]; then
     mv "${tmpdir}/${bin_name}" "${INSTALL_DIR}/${bin_name}"
   else
     info "Need sudo to install to ${INSTALL_DIR}"
     sudo mv "${tmpdir}/${bin_name}" "${INSTALL_DIR}/${bin_name}"
   fi
-  chmod +x "${INSTALL_DIR}/${bin_name}"
+  [ "$OS" != "windows" ] && chmod +x "${INSTALL_DIR}/${bin_name}"
 
   rm -rf "$tmpdir"
   info "Installed ${bin_name} → ${INSTALL_DIR}/${bin_name}"
@@ -130,6 +144,21 @@ main() {
   if [ "$failed" -eq 0 ]; then
     info "Installation complete!"
     echo ""
+    # Check if INSTALL_DIR is in PATH.
+    case ":$PATH:" in
+      *":${INSTALL_DIR}:"*) ;;
+      *)
+        warn "${INSTALL_DIR} is not in your PATH."
+        if [ "$OS" = "windows" ]; then
+          dim "Add it:  setx PATH \"%PATH%;$(cygpath -w "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")\""
+          dim "Then restart your terminal."
+        else
+          dim "Add it:  export PATH=\"${INSTALL_DIR}:\$PATH\""
+          dim "Or add that line to your ~/.bashrc / ~/.zshrc"
+        fi
+        echo ""
+        ;;
+    esac
     dim "Next step:"
     echo "  punkgo-jack setup claude-code"
     echo ""

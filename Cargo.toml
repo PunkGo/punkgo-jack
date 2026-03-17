@@ -1,6 +1,6 @@
 [package]
 name = "punkgo-jack"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "AI tool hook adapter for punkgo-kernel — every tool call gets a cryptographic receipt with Ed25519 signing and RFC 3161 TSA anchoring"
 license = "MIT"

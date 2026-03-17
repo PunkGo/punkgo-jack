@@ -20,8 +20,10 @@ pub struct Config {
 /// TSA anchoring configuration.
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct TsaConfig {
-    /// Master switch. Default: false (opt-in).
-    #[serde(default)]
+    /// Master switch. Default: true (opt-out).
+    /// TSA uses the free DigiCert public service with rate limiting,
+    /// so it is safe to enable by default.
+    #[serde(default = "default_tsa_enabled")]
     pub enabled: bool,
 
     /// Primary TSA endpoint URL. RFC 3161 over HTTP(S).
@@ -41,10 +43,14 @@ pub struct TsaConfig {
     pub min_interval_secs: u64,
 }
 
+fn default_tsa_enabled() -> bool {
+    true
+}
+
 impl Default for TsaConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             url: default_tsa_url(),
             timeout_secs: default_timeout(),
             min_interval_secs: default_min_interval(),
@@ -127,7 +133,7 @@ mod tests {
     #[test]
     fn default_config_values() {
         let config = Config::default();
-        assert!(!config.tsa.enabled);
+        assert!(config.tsa.enabled);
         assert_eq!(config.tsa.url, "http://timestamp.digicert.com");
         assert_eq!(config.tsa.timeout_secs, 10);
         assert_eq!(config.tsa.min_interval_secs, 300);
@@ -168,12 +174,12 @@ min_interval_secs = 0
     #[test]
     fn env_override_enabled() {
         let mut config = Config::default();
-        assert!(!config.tsa.enabled);
+        assert!(config.tsa.enabled); // default is now true
 
-        // Simulate env var
-        std::env::set_var("PUNKGO_TSA_ENABLED", "true");
+        // Simulate env var to disable
+        std::env::set_var("PUNKGO_TSA_ENABLED", "false");
         apply_env_overrides(&mut config);
-        assert!(config.tsa.enabled);
+        assert!(!config.tsa.enabled);
 
         // Cleanup
         std::env::remove_var("PUNKGO_TSA_ENABLED");

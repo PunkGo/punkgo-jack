@@ -556,9 +556,7 @@ fn print_receipt_tsa_status(tree_size: u64) {
             let name_str = name.to_string_lossy();
             if let Some(stem) = name_str.strip_suffix(".tsr") {
                 if let Ok(ts) = stem.parse::<i64>() {
-                    if ts >= tree_size as i64
-                        && best.as_ref().is_none_or(|(b, _)| ts < *b)
-                    {
+                    if ts >= tree_size as i64 && best.as_ref().is_none_or(|(b, _)| ts < *b) {
                         best = Some((ts, entry.path()));
                     }
                 }

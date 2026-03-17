@@ -75,10 +75,23 @@ fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, Vec<String>)> {
 /// Install punkgo hooks into a supported tool's settings.
 pub fn run_setup(tool: &str) -> Result<()> {
     match tool {
-        "claude-code" => setup_claude_code(),
-        "cursor" => setup_cursor(),
+        "claude-code" => setup_claude_code()?,
+        "cursor" => setup_cursor()?,
         other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor"),
     }
+
+    // Check kernel version compatibility.
+    check_kernel_version();
+
+    // Signal collection — help us understand who uses PunkGo and why.
+    eprintln!();
+    eprintln!("Setup complete for {tool}. Your next session is being recorded.");
+    eprintln!();
+    eprintln!("  Quick question — what made you try PunkGo?");
+    eprintln!("  → 30 sec survey: https://punkgo.ai/why");
+    eprintln!();
+
+    Ok(())
 }
 
 fn setup_claude_code() -> Result<()> {
@@ -418,6 +431,51 @@ fn detect_and_save_kerneld() {
                 }
             }
         }
+    }
+}
+
+/// Check kernel version compatibility with jack.
+/// Warns if kernel is missing or outdated.
+fn check_kernel_version() {
+    let output = std::process::Command::new("punkgo-kerneld")
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let version_str = String::from_utf8_lossy(&o.stdout);
+            // Extract version number (e.g. "punkgo-kerneld 0.5.1" → "0.5.1")
+            let kernel_version = version_str.split_whitespace().last().unwrap_or("unknown");
+            let jack_version = env!("CARGO_PKG_VERSION");
+
+            // Compare major.minor — warn if kernel is behind jack.
+            let kernel_minor = parse_major_minor(kernel_version);
+            let jack_minor = parse_major_minor(jack_version);
+
+            if let (Some(km), Some(jm)) = (kernel_minor, jack_minor) {
+                if km < jm {
+                    eprintln!("warning: kernel {kernel_version} is older than jack {jack_version}");
+                    eprintln!("  upgrade: cargo install punkgo-kernel");
+                }
+            }
+        }
+        _ => {
+            // kernel not found — detect_and_save_kerneld already handled this
+        }
+    }
+}
+
+/// Parse "X.Y.Z" → (X, Y) as a comparable tuple.
+fn parse_major_minor(version: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 2 {
+        let major = parts[0].parse().ok()?;
+        let minor = parts[1].parse().ok()?;
+        Some((major, minor))
+    } else {
+        None
     }
 }
 
@@ -1158,7 +1216,7 @@ mod tests {
 
         let entries = hooks["SessionEnd"].as_array().unwrap();
         assert_eq!(entries.len(), 1); // One entry
-        // Two commands in the hooks array
+                                      // Two commands in the hooks array
         let inner = entries[0]["hooks"].as_array().unwrap();
         assert_eq!(inner.len(), 2);
         assert!(inner[0]["command"].as_str().unwrap().contains("ingest"));
@@ -1202,7 +1260,7 @@ mod tests {
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
         assert_eq!(hooks.len(), 6); // 6 unique event names
-        // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
+                                    // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
         let se = hooks["SessionEnd"].as_array().unwrap();
         assert_eq!(se.len(), 1);
         assert_eq!(se[0]["hooks"].as_array().unwrap().len(), 2);
@@ -1332,7 +1390,35 @@ mod tests {
         assert!(hooks.contains_key("SessionStart"));
         assert!(hooks.contains_key("SessionEnd"));
         // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
-        assert_eq!(hooks["SessionEnd"].as_array().unwrap()[0]["hooks"].as_array().unwrap().len(), 2);
-        assert_eq!(hooks["SessionStart"].as_array().unwrap()[0]["hooks"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            hooks["SessionEnd"].as_array().unwrap()[0]["hooks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            hooks["SessionStart"].as_array().unwrap()[0]["hooks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn parse_major_minor_valid() {
+        assert_eq!(parse_major_minor("0.5.1"), Some((0, 5)));
+        assert_eq!(parse_major_minor("1.0.0"), Some((1, 0)));
+        assert_eq!(parse_major_minor("0.5"), Some((0, 5)));
+        assert_eq!(parse_major_minor("12.34.56"), Some((12, 34)));
+    }
+
+    #[test]
+    fn parse_major_minor_invalid() {
+        assert_eq!(parse_major_minor("unknown"), None);
+        assert_eq!(parse_major_minor(""), None);
+        assert_eq!(parse_major_minor("abc.def"), None);
+        assert_eq!(parse_major_minor("5"), None);
     }
 }
