@@ -150,7 +150,8 @@ Cursor Settings → Features → Third-party Skills → Off
 
 | Version | What changed |
 |---------|-------------|
-| **v0.5.2** | 10 hook events (Stop/Subagent/Notification), fix Cursor metadata loss (BOM), semantic TSA rate limit, dual-tool docs |
+| **v0.5.3** | Fix setup hang on macOS (remove kerneld --version check) |
+| v0.5.2 | 10 hook events (Stop/Subagent/Notification), fix Cursor metadata loss (BOM), semantic TSA rate limit, dual-tool docs |
 | v0.5.1 | TSA on by default, Windows install fix, kernel version check, setup survey |
 | v0.5.0 | RFC 3161 TSA anchoring, verify-tsr, config system |
 | v0.4.2 | Multi-agent default (--actor shows all) |
