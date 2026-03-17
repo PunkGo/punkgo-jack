@@ -121,11 +121,6 @@ pub fn tsr_path(tree_size: i64) -> Option<PathBuf> {
     tsa_state_dir().map(|d| d.join(format!("{tree_size}.tsr")))
 }
 
-/// Path for rate limit state file (plain text, epoch seconds).
-pub fn rate_limit_path() -> Option<PathBuf> {
-    tsa_state_dir().map(|d| d.join("last_anchor_ts"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

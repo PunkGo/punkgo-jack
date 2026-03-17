@@ -14,7 +14,7 @@ impl HookAdapter for CursorAdapter {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
 
-        // Session lifecycle events.
+        // Non-tool events: session lifecycle, agent stop, subagent.
         match hook_event {
             "sessionStart" | "sessionEnd" => {
                 return Ok(IngestEvent {
@@ -23,6 +23,51 @@ impl HookAdapter for CursorAdapter {
                     event_type: snake_case(hook_event),
                     content: format!("Cursor {hook_event}"),
                     metadata: build_session_metadata(raw),
+                    source: "cursor".into(),
+                });
+            }
+            "stop" => {
+                let mut meta = build_common_metadata(raw);
+                for key in ["status", "loop_count"] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                return Ok(IngestEvent {
+                    actor_id: "cursor".into(),
+                    target: "session:stop".into(),
+                    event_type: "agent_stop".into(),
+                    content: "Cursor agent stopped".into(),
+                    metadata: meta,
+                    source: "cursor".into(),
+                });
+            }
+            "subagentStart" | "subagentStop" => {
+                let mut meta = build_common_metadata(raw);
+                for key in [
+                    "subagent_id",
+                    "subagent_type",
+                    "task",
+                    "summary",
+                    "status",
+                    "duration_ms",
+                    "message_count",
+                    "tool_call_count",
+                    "loop_count",
+                    "modified_files",
+                    "agent_transcript_path",
+                ] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let stype = str_field(raw, "subagent_type");
+                return Ok(IngestEvent {
+                    actor_id: "cursor".into(),
+                    target: format!("subagent:{stype}"),
+                    event_type: snake_case(hook_event),
+                    content: format!("Cursor {hook_event}: {stype}"),
+                    metadata: meta,
                     source: "cursor".into(),
                 });
             }
@@ -457,5 +502,38 @@ mod tests {
             event.metadata.get("session_id"),
             Some(&json!("conv_abc123"))
         );
+    }
+
+    #[test]
+    fn transform_stop() {
+        let adapter = CursorAdapter;
+        let raw = json!({
+            "hook_event_name": "stop",
+            "conversation_id": "conv_001",
+            "status": "completed",
+            "loop_count": 3
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "agent_stop");
+        assert_eq!(event.target, "session:stop");
+        assert_eq!(event.metadata.get("loop_count"), Some(&json!(3)));
+    }
+
+    #[test]
+    fn transform_subagent_stop() {
+        let adapter = CursorAdapter;
+        let raw = json!({
+            "hook_event_name": "subagentStop",
+            "conversation_id": "conv_001",
+            "subagent_type": "task",
+            "status": "completed",
+            "tool_call_count": 12,
+            "modified_files": ["src/main.rs", "src/lib.rs"]
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "subagent_stop");
+        assert_eq!(event.target, "subagent:task");
+        assert_eq!(event.metadata.get("tool_call_count"), Some(&json!(12)));
+        assert!(event.metadata.contains_key("modified_files"));
     }
 }

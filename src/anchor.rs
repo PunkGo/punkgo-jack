@@ -92,17 +92,20 @@ impl AnchorReceipt {
 
 /// Core anchor logic. Returns Some(receipt) on success, None if skipped.
 pub fn do_anchor(config: &Config) -> Result<Option<AnchorReceipt>> {
-    if !check_rate_limit(config)? {
-        debug!("rate limited, skipping anchor");
-        return Ok(None);
-    }
-
     let client = IpcClient::from_env(None);
     let (tree_size, root_hash) = fetch_checkpoint(&client)?;
 
     let tsr_path = config::tsr_path(tree_size).context("failed to determine TSR storage path")?;
-    if tsr_path.exists() {
+    let tsr_exists = tsr_path.exists();
+    if tsr_exists {
         debug!(tree_size, "already anchored");
+        return Ok(None);
+    }
+
+    // Semantic rate limit: skip if tree hasn't grown since last anchor AND the
+    // TSR file exists. If TSR is missing (deleted/lost), always re-anchor.
+    if !should_anchor(tree_size, tsr_exists, config)? {
+        debug!(tree_size, "no new events since last anchor, skipping");
         return Ok(None);
     }
 
@@ -128,7 +131,7 @@ pub fn do_anchor(config: &Config) -> Result<Option<AnchorReceipt>> {
     }
     fs::rename(&tmp_path, &tsr_path)?;
 
-    update_rate_limit()?;
+    save_last_anchored_tree_size(tree_size)?;
 
     info!(tree_size, root_hash = %root_hash, gen_time = %tsr_info.gen_time, "checkpoint anchored");
     Ok(Some(AnchorReceipt {
@@ -222,41 +225,46 @@ fn http_post_tsa(url: &str, tsq: &[u8], timeout_secs: u64) -> Result<Vec<u8>> {
     Ok(body)
 }
 
-// ─── Rate limiting ─────────────────────────────────────────────────
+// ─── Semantic rate limiting ────────────────────────────────────────
+//
+// Primary: anchor only when tree has grown (new events since last anchor).
+// Fallback: clock-based interval when tree_size tracking is unavailable.
+// min_interval_secs=0 disables all rate limiting (CI burst mode).
 
-fn check_rate_limit(config: &Config) -> Result<bool> {
-    if config.tsa.min_interval_secs == 0 {
+/// Decide whether to anchor based on tree growth.
+///
+/// - burst mode (min_interval_secs=0): always anchor
+/// - TSR file missing: always anchor (recovery)
+/// - tree hasn't grown since last anchor: skip
+/// - first run (no last_tree_size file): anchor
+fn should_anchor(current_tree_size: i64, tsr_exists: bool, _config: &Config) -> Result<bool> {
+    if _config.tsa.min_interval_secs == 0 {
         return Ok(true);
     }
-    let Some(path) = config::rate_limit_path() else {
-        return Ok(true);
-    };
-    if !path.exists() {
+
+    if !tsr_exists {
         return Ok(true);
     }
-    let text = fs::read_to_string(&path).unwrap_or_default();
-    let last_ts: u64 = text.trim().parse().unwrap_or(0);
-    let now = now_epoch_secs();
-    let elapsed = now.saturating_sub(last_ts);
-    Ok(elapsed >= config.tsa.min_interval_secs)
+
+    match load_last_anchored_tree_size() {
+        Some(last_size) => Ok(current_tree_size > last_size),
+        None => Ok(true), // first run — anchor
+    }
 }
 
-fn update_rate_limit() -> Result<()> {
-    let Some(path) = config::rate_limit_path() else {
+fn load_last_anchored_tree_size() -> Option<i64> {
+    let path = config::tsa_state_dir()?.join("last_tree_size");
+    let text = fs::read_to_string(path).ok()?;
+    text.trim().parse().ok()
+}
+
+fn save_last_anchored_tree_size(tree_size: i64) -> Result<()> {
+    let Some(dir) = config::tsa_state_dir() else {
         return Ok(());
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, now_epoch_secs().to_string())?;
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join("last_tree_size"), tree_size.to_string())?;
     Ok(())
-}
-
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 #[cfg(test)]
@@ -280,5 +288,18 @@ mod tests {
         let r1 = build_timestamp_req(&[0x00; 32]).unwrap();
         let r2 = build_timestamp_req(&[0xff; 32]).unwrap();
         assert_ne!(r1, r2);
+    }
+
+    #[test]
+    fn should_anchor_burst_mode_always_true() {
+        let config = Config {
+            tsa: config::TsaConfig {
+                min_interval_secs: 0,
+                ..Default::default()
+            },
+        };
+        // burst mode (min_interval=0) always allows anchoring
+        assert!(should_anchor(1, false, &config).unwrap());
+        assert!(should_anchor(100, true, &config).unwrap());
     }
 }

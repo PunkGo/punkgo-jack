@@ -323,7 +323,9 @@ fn read_stdin() -> Result<Value> {
     std::io::stdin()
         .read_to_string(&mut buf)
         .context("failed to read stdin")?;
-    serde_json::from_str(&buf).context("failed to parse stdin as JSON")
+    // Cursor on Windows prepends UTF-8 BOM (\xEF\xBB\xBF) to stdin.
+    let json_str = buf.strip_prefix('\u{FEFF}').unwrap_or(&buf);
+    serde_json::from_str(json_str).context("failed to parse stdin as JSON")
 }
 
 /// Return the correct default JSON response for a Cursor hook event.
@@ -339,6 +341,8 @@ fn cursor_default_response(raw: &Value) -> Value {
     match hook {
         "preToolUse" | "PreToolUse" => json!({"permission": "allow"}),
         "beforeSubmitPrompt" | "UserPromptSubmit" => json!({"continue": true}),
+        // Cursor's subagentStart can block — allow it.
+        "subagentStart" | "SubagentStart" => json!({"permission": "allow"}),
         _ => json!({}),
     }
 }

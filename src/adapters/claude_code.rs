@@ -14,7 +14,7 @@ impl HookAdapter for ClaudeCodeAdapter {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
 
-        // Session lifecycle events have no tool data.
+        // Non-tool events: session lifecycle, agent stop, subagent, notification.
         match hook_event {
             "SessionStart" | "SessionEnd" => {
                 return Ok(IngestEvent {
@@ -23,6 +23,62 @@ impl HookAdapter for ClaudeCodeAdapter {
                     event_type: snake_case(hook_event),
                     content: format!("Claude Code {hook_event}"),
                     metadata: build_session_metadata(raw),
+                    source: "claude-code".into(),
+                });
+            }
+            "Stop" => {
+                let mut meta = build_session_metadata(raw);
+                if let Some(v) = raw.get("last_assistant_message") {
+                    meta.insert(
+                        "last_assistant_message".into(),
+                        json!(truncate(v.as_str().unwrap_or(""), 500)),
+                    );
+                }
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: "session:Stop".into(),
+                    event_type: "agent_stop".into(),
+                    content: "Claude Code agent stopped".into(),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "SubagentStart" | "SubagentStop" => {
+                let mut meta = build_session_metadata(raw);
+                for key in [
+                    "agent_id",
+                    "agent_type",
+                    "agent_transcript_path",
+                    "last_assistant_message",
+                ] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let agent_type = str_field(raw, "agent_type");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("subagent:{agent_type}"),
+                    event_type: snake_case(hook_event),
+                    content: format!("Claude Code {hook_event}: {agent_type}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "Notification" => {
+                let mut meta = build_session_metadata(raw);
+                for key in ["notification_type", "message", "title"] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let ntype = str_field(raw, "notification_type");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("notification:{ntype}"),
+                    event_type: "notification".into(),
+                    content: format!("Notification: {}", str_field(raw, "message")),
+                    metadata: meta,
                     source: "claude-code".into(),
                 });
             }
@@ -633,5 +689,49 @@ mod tests {
         assert!(!meta.contains_key("tool_response"));
         assert_eq!(meta.get("has_response"), Some(&json!(true)));
         assert_eq!(meta.get("exit_code"), Some(&json!(0)));
+    }
+
+    #[test]
+    fn transform_stop() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "Stop",
+            "session_id": "ses_xyz",
+            "last_assistant_message": "Done! All tests pass."
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "agent_stop");
+        assert_eq!(event.target, "session:Stop");
+        assert!(event.metadata.contains_key("last_assistant_message"));
+    }
+
+    #[test]
+    fn transform_subagent_stop() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "SubagentStop",
+            "session_id": "ses_xyz",
+            "agent_id": "agent_001",
+            "agent_type": "code-reviewer"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "subagent_stop");
+        assert_eq!(event.target, "subagent:code-reviewer");
+    }
+
+    #[test]
+    fn transform_notification() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "Notification",
+            "session_id": "ses_xyz",
+            "notification_type": "permission_prompt",
+            "message": "Claude wants to run rm -rf",
+            "title": "Permission required"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "notification");
+        assert_eq!(event.target, "notification:permission_prompt");
+        assert!(event.content.contains("Claude wants to run"));
     }
 }

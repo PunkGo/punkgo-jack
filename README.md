@@ -12,7 +12,7 @@ Your AI agent just deleted your production database. Your `.env`. It happens eve
 
 ---
 
-**Contents:** [Why](#why-i-built-this) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Evolution](#evolution)
+**Contents:** [Why](#why-i-built-this) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Dual-Tool](#dual-tool-coexistence-claude-code--cursor) · [Evolution](#evolution)
 
 ---
 
@@ -122,16 +122,36 @@ Disable TSA: set `enabled = false` or `PUNKGO_TSA_ENABLED=false`. Other env vars
 
 | Tool | Status | Setup |
 |------|--------|-------|
-| **Claude Code** | Supported | `setup claude-code` — 6 hooks + statusline |
-| **Cursor** | Supported | `setup cursor` — dedicated adapter |
+| **Claude Code** | Supported | `setup claude-code` — 10 hooks (tools, sessions, subagents, notifications) + statusline |
+| **Cursor** | Supported | `setup cursor` — 9 hooks (tools, sessions, subagents) |
 | **MCP** | Built-in | `serve` — 7 tools for agent self-query |
 | Windsurf, Cline | Planned | — |
+
+## Dual-Tool Coexistence: Claude Code + Cursor
+
+If you use both Claude Code and Cursor on the same machine, each tool gets its own hooks (`setup claude-code` + `setup cursor`). However, Cursor's **Third-party Skills** feature reads Claude Code's `settings.json` hooks — this can cause Claude Code hooks to fire inside Cursor sessions.
+
+PunkGo handles this automatically: when a `--source claude-code` hook runs inside Cursor (detected via `CURSOR_VERSION` env var), it is silently skipped. The dedicated `--source cursor` hook handles recording instead. No duplicate events, no manual config needed.
+
+**Recommended setup for dual-tool users:**
+1. Run both: `punkgo-jack setup claude-code && punkgo-jack setup cursor`
+2. Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatically
+3. If you see unexpected hook errors in Cursor, check that both tools are on the same PunkGo version (`punkgo-jack upgrade`)
+
+<details>
+<summary>Alternative: disable Third-party Skills in Cursor</summary>
+
+If you prefer full isolation, disable Third-party Skills in Cursor settings. This prevents Cursor from reading Claude Code's hooks entirely. PunkGo's own Cursor hooks (`~/.cursor/hooks.json`) are unaffected.
+
+Cursor Settings → Features → Third-party Skills → Off
+</details>
 
 ## Evolution
 
 | Version | What changed |
 |---------|-------------|
-| **v0.5.1** | TSA on by default, Windows install fix, kernel version check, setup survey |
+| **v0.5.2** | 10 hook events (Stop/Subagent/Notification), fix Cursor metadata loss (BOM), semantic TSA rate limit, dual-tool docs |
+| v0.5.1 | TSA on by default, Windows install fix, kernel version check, setup survey |
 | v0.5.0 | RFC 3161 TSA anchoring, verify-tsr, config system |
 | v0.4.2 | Multi-agent default (--actor shows all) |
 | v0.4.1 | Cursor IDE support, dual-tool coexistence |

@@ -65,6 +65,26 @@ fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, Vec<String>)> {
                 format!("{exe_cmd} anchor --quiet"),
             ],
         ),
+        // P0: agent completion — marks end of an action unit.
+        (
+            "Stop",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // P0: subagent lifecycle — independent audit unit.
+        (
+            "SubagentStop",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // P1: subagent start — pairs with SubagentStop.
+        (
+            "SubagentStart",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // P0 (Claude Code only): async notifications (permission, idle, etc.)
+        (
+            "Notification",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
     ]
 }
 
@@ -180,16 +200,23 @@ fn setup_claude_code() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Map Claude Code PascalCase event names to Cursor camelCase equivalents.
-fn cursor_event_name(claude_name: &str) -> &str {
-    match claude_name {
+fn cursor_event_name(claude_name: &str) -> Option<&str> {
+    Some(match claude_name {
         "PreToolUse" => "preToolUse",
         "PostToolUse" => "postToolUse",
         "PostToolUseFailure" => "postToolUseFailure",
         "UserPromptSubmit" => "beforeSubmitPrompt",
         "SessionStart" => "sessionStart",
         "SessionEnd" => "sessionEnd",
+        "Stop" => "stop",
+        "SubagentStart" => "subagentStart",
+        "SubagentStop" => "subagentStop",
+        // Notification is Claude Code only — skip for Cursor.
+        "Notification" => return None,
+        // IMPORTANT: new Claude Code-only events must return None above.
+        // Falling through passes PascalCase name to Cursor, which silently ignores it.
         other => other,
-    }
+    })
 }
 
 fn setup_cursor() -> Result<()> {
@@ -242,7 +269,9 @@ fn setup_cursor() -> Result<()> {
     let mut skipped = 0;
 
     for (claude_event, commands) in &events {
-        let cursor_event = cursor_event_name(claude_event);
+        let Some(cursor_event) = cursor_event_name(claude_event) else {
+            continue; // Event not applicable to Cursor (e.g. Notification).
+        };
 
         // Get or create the array for this event.
         if !hooks.contains_key(cursor_event) {
@@ -1259,8 +1288,8 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 6); // 6 unique event names
-                                    // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
+        assert_eq!(hooks.len(), 10); // 10 unique event names
+                                     // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
         let se = hooks["SessionEnd"].as_array().unwrap();
         assert_eq!(se.len(), 1);
         assert_eq!(se[0]["hooks"].as_array().unwrap().len(), 2);
@@ -1382,7 +1411,7 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 6); // 6 unique event names
+        assert_eq!(hooks.len(), 10); // 10 unique event names
         assert!(hooks.contains_key("PreToolUse"));
         assert!(hooks.contains_key("PostToolUse"));
         assert!(hooks.contains_key("PostToolUseFailure"));
