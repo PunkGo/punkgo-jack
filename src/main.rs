@@ -14,6 +14,7 @@ mod ipc_client;
 mod mcp;
 mod presence;
 mod report;
+mod roast;
 mod roast_analysis;
 mod roast_render;
 mod session;
@@ -55,6 +56,7 @@ fn print_usage() {
          \x20 show <EVENT_ID>         Show full details of a single event\n\
          \x20 receipt [SESSION_ID]    Generate session receipt\n\
          \x20 report [SESSION_ID]     Generate turn-based session report\n\
+         \x20 roast [OPTIONS]        AI personality diagnosis receipt\n\
          \x20 presence [DAYS]         Show collaboration heatmap (default: 14 days)\n\
          \x20 statusline on|off       Toggle energy statusline (Claude Code only)\n\
          \x20 anchor [OPTIONS]        Anchor latest checkpoint to TSA\n\
@@ -114,6 +116,7 @@ fn main() {
         "show" => run_show(&mut args),
         "receipt" => run_receipt(&mut args),
         "report" => run_report(&mut args),
+        "roast" => run_roast(&mut args),
         "presence" => run_presence(&mut args),
         "statusline" => run_statusline(&mut args),
         "anchor" => anchor::run_anchor(&mut args),
@@ -200,6 +203,11 @@ fn run_receipt(args: &mut impl Iterator<Item = String>) -> Result<()> {
 fn run_report(args: &mut impl Iterator<Item = String>) -> Result<()> {
     let parsed = report::parse_args(args)?;
     report::run_report(parsed)
+}
+
+fn run_roast(args: &mut impl Iterator<Item = String>) -> Result<()> {
+    let parsed = roast::parse_args(args)?;
+    roast::run_roast(parsed)
 }
 
 fn run_presence(args: &mut impl Iterator<Item = String>) -> Result<()> {
