@@ -15,6 +15,7 @@ mod mcp;
 mod presence;
 mod report;
 mod roast_analysis;
+mod roast_render;
 mod session;
 mod setup;
 mod spillover;
