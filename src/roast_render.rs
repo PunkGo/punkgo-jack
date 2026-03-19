@@ -205,9 +205,10 @@ pub fn render_cli(data: &RoastData) -> String {
         out.push('\n');
     }
 
-    // CTA — e.g. "Your AI is a the brute." matches test expectation
+    // CTA — strip "THE " prefix for natural English
     let name_lower = data.personality.name().to_lowercase();
-    out.push_str(&format!("    Your AI is a {}.\n", name_lower));
+    let name_short = name_lower.strip_prefix("the ").unwrap_or(&name_lower);
+    out.push_str(&format!("    Your AI is a {}.\n", name_short));
     out.push_str("    What's yours?\n");
     out.push_str("    > punkgo.ai/roast\n");
     out.push_str("  ========================================\n");
@@ -506,7 +507,7 @@ pub fn render_svg(data: &RoastData) -> String {
         "<text x=\"220\" y=\"668\" \
          style=\"fill:#8b949e;font-size:10px;font-family:monospace;text-anchor:middle\">\
          Your AI is a {name}. What&apos;s yours?</text>\n",
-        name = name_lower,
+        name = name_lower.strip_prefix("the ").unwrap_or(&name_lower),
     ));
     out.push_str(
         "<text x=\"220\" y=\"678\" \
@@ -581,7 +582,7 @@ mod tests {
         let mut data = sample_data();
         data.personality = Personality::Brute;
         let out = render_cli(&data);
-        assert!(out.contains("the brute"));
+        assert!(out.contains("a brute")); // "the" prefix stripped for natural CTA
     }
 
     #[test]
