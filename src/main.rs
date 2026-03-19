@@ -14,6 +14,7 @@ mod ipc_client;
 mod mcp;
 mod presence;
 mod report;
+mod roast_analysis;
 mod session;
 mod setup;
 mod spillover;
