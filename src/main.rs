@@ -6,6 +6,7 @@ mod backend;
 mod blob;
 mod config;
 mod daemon;
+mod data_fetch;
 mod export;
 mod history;
 mod ingest;

@@ -1,8 +1,11 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::ipc_client::{new_request_id, IpcClient};
-use punkgo_core::protocol::{RequestEnvelope, RequestType};
+use crate::data_fetch::{
+    event_matches_session, fetch_all_events, format_timestamp_date, format_timestamp_full,
+    format_timestamp_time, parse_event_timestamp_ms,
+};
+use crate::ipc_client::IpcClient;
 
 /// Parsed CLI arguments for `punkgo-jack export`.
 #[derive(Debug)]
@@ -106,119 +109,6 @@ pub fn run_export(args: ExportArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Fetch events from kernel with pagination. Returns events in chronological
-/// order (oldest first).
-fn fetch_all_events(
-    client: &IpcClient,
-    actor_id: Option<&str>,
-    limit: Option<u64>,
-) -> Result<Vec<Value>> {
-    let mut all_events: Vec<Value> = Vec::new();
-    let mut before_index: Option<i64> = None;
-    let page_size: u64 = 500; // Kernel max is 500.
-
-    // If --last N is specified and N <= page_size, fetch just one page.
-    let target_count = limit.unwrap_or(u64::MAX);
-
-    loop {
-        let mut payload = json!({ "kind": "events", "limit": page_size });
-        if let Some(actor) = actor_id {
-            payload["actor_id"] = json!(actor);
-        }
-        if let Some(before) = before_index {
-            payload["before_index"] = json!(before);
-        }
-
-        let req = RequestEnvelope {
-            request_id: new_request_id(),
-            request_type: RequestType::Read,
-            payload,
-        };
-
-        let resp = client.send(&req)?;
-        if resp.status != "ok" {
-            let msg = resp
-                .payload
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error");
-            bail!("failed to query events: {msg}. Is punkgo-kerneld running?");
-        }
-
-        let events = resp
-            .payload
-            .get("events")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-
-        let has_more = resp
-            .payload
-            .get("has_more")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
-        if events.is_empty() {
-            break;
-        }
-
-        // next_cursor is the smallest log_index in this page (last element,
-        // since results are ordered DESC). Use it as before_index for next page.
-        let next_cursor = resp.payload.get("next_cursor").and_then(Value::as_i64);
-
-        all_events.extend(events);
-
-        // Check if we have enough events for --last N.
-        if all_events.len() as u64 >= target_count {
-            break;
-        }
-
-        if !has_more {
-            break;
-        }
-
-        // Set before_index for next page.
-        if let Some(cursor) = next_cursor {
-            before_index = Some(cursor);
-        } else {
-            break;
-        }
-    }
-
-    // Events come in DESC order from kernel. Reverse to chronological order.
-    all_events.reverse();
-
-    // If --last N, take the last N events (which are now at the end after reverse).
-    if let Some(n) = limit {
-        let n = n as usize;
-        if all_events.len() > n {
-            all_events = all_events.split_off(all_events.len() - n);
-        }
-    }
-
-    Ok(all_events)
-}
-
-fn event_matches_session(event: &Value, session_id: &str) -> bool {
-    // Check payload.metadata.session_id or payload.metadata.punkgo_session_id.
-    let meta = event.get("payload").and_then(|p| p.get("metadata"));
-
-    if let Some(m) = meta {
-        if let Some(sid) = m.get("session_id").and_then(Value::as_str) {
-            if sid == session_id || sid.starts_with(session_id) {
-                return true;
-            }
-        }
-        if let Some(sid) = m.get("punkgo_session_id").and_then(Value::as_str) {
-            if sid == session_id || sid.starts_with(session_id) {
-                return true;
-            }
-        }
-    }
-
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -381,55 +271,6 @@ fn truncate_at_char_boundary(s: &str, max: usize) -> &str {
         end -= 1;
     }
     &s[..end]
-}
-
-// ---------------------------------------------------------------------------
-// Timestamp helpers
-// ---------------------------------------------------------------------------
-
-fn parse_event_timestamp_ms(event: &Value) -> Option<u64> {
-    // Prefer client_timestamp, then kernel timestamp.
-    if let Some(ct) = event
-        .pointer("/payload/client_timestamp")
-        .and_then(|v| v.as_u64())
-    {
-        return Some(ct);
-    }
-    match event.get("timestamp")? {
-        Value::String(s) if s.chars().all(|c| c.is_ascii_digit()) => s.parse::<u64>().ok(),
-        Value::Number(n) => n.as_u64(),
-        _ => None,
-    }
-}
-
-fn format_timestamp_full(ms: u64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms as i64)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|| "unknown".into())
-}
-
-fn format_timestamp_date(ms: u64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms as i64)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string()
-        })
-        .unwrap_or_else(|| "unknown".into())
-}
-
-fn format_timestamp_time(ms: u64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms as i64)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|| "??:??:??".into())
 }
 
 // ---------------------------------------------------------------------------
