@@ -14,14 +14,27 @@ Design principles:
 - Avoid adding a second append-only log implementation here
 - Prefer thin facades and protocol adapters over duplicated kernel logic
 
+## Requirements
+
+- **Rust 1.83+** (MSRV declared in `Cargo.toml`)
+- `punkgo-kerneld` running for integration testing (unit tests use `EmbeddedBackend` / `MockBackend` under `#[cfg(test)]`)
+
 ## Local Development
 
 ```bash
-cargo check
+cargo fmt
+cargo clippy -- -D warnings
 cargo test
 ```
 
-Requires `punkgo-kerneld` running for integration testing (unit tests use `EmbeddedBackend` / `MockBackend` under `#[cfg(test)]`).
+All three must pass before submitting a PR. CI runs these on three platforms (Ubuntu, Windows, macOS).
+
+Feature flags:
+
+```bash
+cargo test --all-features        # includes rebuild-audit (requires SQLite)
+cargo test --no-default-features  # without roast-png (no resvg/tiny-skia)
+```
 
 ## Runtime Mode
 
@@ -38,5 +51,5 @@ Requires `punkgo-kerneld` running for integration testing (unit tests use `Embed
 ## Near-Term Priorities
 
 - `read_events` pagination/cursor integration (kernel-level limitation, scan_limit max 100)
-- Cursor / Windsurf hook adapters
-- connect-or-spawn daemon mode (auto-start `punkgo-kerneld`)
+- Windsurf hook adapter (Cursor adapter completed in v0.4.1)
+- **Roast** (`punkgo-jack roast`) — AI personality diagnosis based on recorded events. Analyzes coding patterns and maps them to one of 16 MBTI-inspired dog personalities. Config-driven via TOML. Code lives in `src/roast/`.

@@ -56,8 +56,6 @@ pub struct PersonalityConfig {
     pub catchphrase: String,
     /// Condition expression, e.g. "think_do_ratio > 2.5"
     pub condition: String,
-    #[allow(dead_code)]
-    pub priority: u32,
     /// Optional radar chart bias overrides (0-100)
     #[serde(default)]
     pub radar_bias: HashMap<String, f64>,
@@ -96,7 +94,7 @@ impl RoastMetrics {
         self.vars.get(name).copied().unwrap_or(0.0)
     }
 
-    /// Build metrics from raw counters (called by roast_analysis after counting events).
+    /// Build metrics from raw counters (called by analysis after counting events).
     #[allow(clippy::too_many_arguments)]
     pub fn from_counters(
         total_events: usize,
@@ -456,7 +454,7 @@ fn format_comma(n: i64) -> String {
         out.push('-');
     }
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
+        if i > 0 && (len - i) % 3 == 0 {
             out.push(',');
         }
         out.push(b as char);

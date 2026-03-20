@@ -1,28 +1,53 @@
 # punkgo-jack
 
+[![CI](https://github.com/PunkGo/punkgo-jack/actions/workflows/ci.yml/badge.svg)](https://github.com/PunkGo/punkgo-jack/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/punkgo-jack.svg)](https://crates.io/crates/punkgo-jack)
-
-> Every AI action gets a receipt.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/assets/presence.svg" alt="PunkGo presence heatmap — 7 days of AI agent activity across Claude Code and Cursor" width="680">
+  <img src="https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/assets/roast-hero.png" alt="16 AI dog breeds — What kind of dog is your AI?" width="680">
 </p>
 
-Your AI agent just deleted your production database. Your `.env`. It happens every week — and nobody can prove what went wrong, because the session is already gone. PunkGo records every tool call to an append-only Merkle tree with Ed25519 signatures and optional RFC 3161 timestamps.
+<h3 align="center">What kind of dog is your AI?</h3>
+
+<p align="center">
+AI personality diagnosis based on your real coding data.<br>
+16 dog breeds. Meme radar. Shareable cards. No quiz.
+</p>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.sh | bash
+punkgo-jack roast --png
+```
+
+Oh, and it also does **cryptographic audit receipts** for every AI action. Ed25519 signatures, Merkle trees, RFC 3161 timestamps. The boring stuff that matters when things go wrong.
 
 ---
 
-**Contents:** [Why](#why-i-built-this) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Dual-Tool](#dual-tool-coexistence-claude-code--cursor) · [Evolution](#evolution)
+**Contents:** [Roast](#roast) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Evolution](#evolution)
 
 ---
 
-## Why I built this
+## Roast
 
-I've been using Claude Code daily since January 2025. After 25,000+ AI actions, I realized I had zero proof of what actually happened. The AI's own logs? It can edit those. Git history? Doesn't capture the thinking process. I wanted something that works like a dashcam — always recording, can't be tampered with, and there when you need it.
+Your AI has a personality. We proved it with math.
 
-PunkGo Jack is that dashcam. Not a log file you can delete. Not a summary the AI writes about itself. A cryptographic receipt — append-only, Ed25519-signed, RFC 3161 timestamped. You can't backdate it, you can't delete it, you can't forge it.
+```bash
+punkgo-jack roast              # terminal meme radar
+punkgo-jack roast --png        # shareable card → ./punkgo-roast.png
+punkgo-jack roast --svg        # vector card → ./punkgo-roast.svg
+punkgo-jack roast --today      # today's vibe only
+punkgo-jack roast --week       # last 7 days
+punkgo-jack roast help         # all options
+```
 
-**Who is this for?** If you use Claude Code or Cursor for client work, team projects, or anything where you need to show what your AI actually did — this is for you.
+16 MBTI-mapped personalities — Philosopher, Commander, Ghost, Speedrunner, Intern... each with a dog breed, a catchphrase, and a set of quips selected from your actual coding data.
+
+Six-axis meme radar: **Yapping** · **Googling** · **Grinding** · **Shipping** · **Tunnel Vision** · **Plot Armor**
+
+Config-driven. All 16 personalities live in a single TOML file — add your own or override at `~/.punkgo/roast.toml`.
+
+**See all 16 breeds** &rarr; [punkgo.ai/roast](https://punkgo.ai/roast)
 
 ---
 
@@ -33,7 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.sh 
 punkgo-jack setup claude-code   # or: punkgo-jack setup cursor
 ```
 
-That's it — two commands. Your next AI session is recorded with Ed25519 signatures and RFC 3161 timestamps. Verify anytime:
+Two commands. Your next AI session is recorded with Ed25519 signatures and RFC 3161 timestamps.
 
 ```bash
 punkgo-jack receipt             # session summary + anchor time
@@ -43,15 +68,23 @@ punkgo-jack verify <ID>         # cryptographic proof
 Upgrade: `punkgo-jack upgrade`. Uninstall: `punkgo-jack unsetup claude-code`.
 
 <details>
-<summary>Windows / manual install</summary>
+<summary>Windows (PowerShell)</summary>
 
 ```powershell
-cargo install punkgo-jack && cargo install punkgo-kernel
+irm https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.ps1 | iex
 punkgo-jack setup claude-code
 ```
 
-Requires [Rust toolchain](https://rustup.rs). The install script also works in Git Bash on Windows.
+Or manually: `cargo install punkgo-jack && cargo install punkgo-kernel`. Requires [Rust toolchain](https://rustup.rs).
 </details>
+
+## Why receipts?
+
+Your AI agent just deleted your production database. Your `.env`. It happens every week — and nobody can prove what went wrong, because the session is already gone.
+
+PunkGo Jack is a dashcam for AI coding. Not a log file you can delete. Not a summary the AI writes about itself. A cryptographic receipt — append-only, Ed25519-signed, RFC 3161 timestamped. You can't backdate it, you can't delete it, you can't forge it.
+
+**Who is this for?** If you use Claude Code or Cursor for client work, team projects, or anything where you need to show what your AI actually did.
 
 ## How It Works
 
@@ -59,7 +92,7 @@ Requires [Rust toolchain](https://rustup.rs). The install script also works in G
   <img src="https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/assets/overview.svg" alt="PunkGo overview — AI tools, hook adapter, kernel, three trust layers, verifiable receipts" width="680">
 </p>
 
-Hook fires → jack transforms → kernel commits to Merkle tree + Ed25519 signs → receipt returned. Daemon down? Auto-started. Still down? Buffered to spillover, replayed later.
+Hook fires &rarr; jack transforms &rarr; kernel commits to Merkle tree + Ed25519 signs &rarr; receipt sealed. Daemon down? Auto-started. Still down? Buffered to spillover, replayed later.
 
 ## Verify
 
@@ -78,7 +111,7 @@ Cross-language verification: export proof JSON, verify with Go's `sumdb/tlog` �
 
 ## Trust Layers
 
-Each layer adds a guarantee the layer below cannot provide:
+> "Trust me bro" is not a cryptographic primitive.
 
 | Layer | Proves | Mechanism |
 |-------|--------|-----------|
@@ -92,6 +125,7 @@ A root operator with the signing key could rebuild the tree — this is the sing
 
 | Command | Description |
 |---------|-------------|
+| `roast` | AI personality roast (try: `roast help`) |
 | `setup <tool>` | Install hooks (claude-code, cursor) |
 | `history` | Recent events table |
 | `show <ID>` | Event details + Merkle proof + TSA status |
@@ -122,42 +156,40 @@ Disable TSA: set `enabled = false` or `PUNKGO_TSA_ENABLED=false`. Other env vars
 
 | Tool | Status | Setup |
 |------|--------|-------|
-| **Claude Code** | Supported | `setup claude-code` — 10 hooks (tools, sessions, subagents, notifications) + statusline |
-| **Cursor** | Supported | `setup cursor` — 9 hooks (tools, sessions, subagents) |
+| **Claude Code** | Supported | `setup claude-code` — 10 hooks + statusline |
+| **Cursor** | Supported | `setup cursor` — 9 hooks |
 | **MCP** | Built-in | `serve` — 7 tools for agent self-query |
 | Windsurf, Cline | Planned | — |
 
-## Dual-Tool Coexistence: Claude Code + Cursor
-
-If you use both Claude Code and Cursor on the same machine, each tool gets its own hooks (`setup claude-code` + `setup cursor`). However, Cursor's **Third-party Skills** feature reads Claude Code's `settings.json` hooks — this can cause Claude Code hooks to fire inside Cursor sessions.
-
-PunkGo handles this automatically: when a `--source claude-code` hook runs inside Cursor (detected via `CURSOR_VERSION` env var), it is silently skipped. The dedicated `--source cursor` hook handles recording instead. No duplicate events, no manual config needed.
-
-**Recommended setup for dual-tool users:**
-1. Run both: `punkgo-jack setup claude-code && punkgo-jack setup cursor`
-2. Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatically
-3. If you see unexpected hook errors in Cursor, check that both tools are on the same PunkGo version (`punkgo-jack upgrade`)
-
 <details>
-<summary>Alternative: disable Third-party Skills in Cursor</summary>
+<summary>Dual-Tool Coexistence: Claude Code + Cursor</summary>
 
-If you prefer full isolation, disable Third-party Skills in Cursor settings. This prevents Cursor from reading Claude Code's hooks entirely. PunkGo's own Cursor hooks (`~/.cursor/hooks.json`) are unaffected.
+If you use both, each tool gets its own hooks. Cursor's Third-party Skills reads Claude Code's `settings.json` — PunkGo handles this automatically: `--source claude-code` hooks inside Cursor are silently skipped. No duplicate events.
 
-Cursor Settings → Features → Third-party Skills → Off
+**Setup:** `punkgo-jack setup claude-code && punkgo-jack setup cursor`
+
+Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatically.
 </details>
 
 ## Evolution
 
 | Version | What changed |
 |---------|-------------|
-| **v0.5.3** | Fix setup hang on macOS (remove kerneld --version check) |
-| v0.5.2 | 10 hook events (Stop/Subagent/Notification), fix Cursor metadata loss (BOM), semantic TSA rate limit, dual-tool docs |
-| v0.5.1 | TSA on by default, Windows install fix, kernel version check, setup survey |
+| **v0.5.4** | Roast — AI personality diagnosis, 16 MBTI dog breeds, shareable cards |
+| v0.5.3 | Fix setup hang on macOS |
+| v0.5.2 | 10 hook events, Cursor BOM fix, semantic TSA rate limit |
+| v0.5.1 | TSA on by default, Windows install fix |
 | v0.5.0 | RFC 3161 TSA anchoring, verify-tsr, config system |
-| v0.4.2 | Multi-agent default (--actor shows all) |
 | v0.4.1 | Cursor IDE support, dual-tool coexistence |
 | v0.4.0 | Verify, export, presence heatmap, MCP server |
 
 ## License
 
 [MIT](LICENSE)
+
+---
+
+<p align="center">
+Every AI action gets a receipt.<br>
+<a href="https://punkgo.ai">punkgo.ai</a>
+</p>

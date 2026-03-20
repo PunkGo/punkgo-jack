@@ -1,13 +1,16 @@
 [package]
 name = "punkgo-jack"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "AI tool hook adapter for punkgo-kernel — every tool call gets a cryptographic receipt with Ed25519 signing and RFC 3161 TSA anchoring"
 license = "MIT"
 repository = "https://github.com/PunkGo/punkgo-jack"
-homepage = "https://github.com/PunkGo/punkgo-jack"
+homepage = "https://punkgo.ai"
+rust-version = "1.83"
+readme = "README.md"
 keywords = ["ai", "audit", "merkle", "agent", "accountability"]
-categories = ["command-line-utilities", "development-tools"]
+categories = ["command-line-utilities", "development-tools", "cryptography"]
+include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [features]
 default = ["roast-png"]

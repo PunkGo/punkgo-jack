@@ -163,7 +163,6 @@ pub fn format_timestamp_time(ms: u64) -> String {
 }
 
 /// Fetch latest checkpoint from kernel (best-effort).
-#[allow(dead_code)]
 pub fn fetch_checkpoint(client: &IpcClient) -> Result<Value> {
     let req = RequestEnvelope {
         request_id: new_request_id(),
@@ -178,7 +177,6 @@ pub fn fetch_checkpoint(client: &IpcClient) -> Result<Value> {
 }
 
 /// Extract the event_type string from an event Value.
-#[allow(dead_code)]
 pub fn event_type(event: &Value) -> &str {
     event
         .get("payload")
@@ -189,7 +187,6 @@ pub fn event_type(event: &Value) -> &str {
 }
 
 /// Extract the target string from an event Value.
-#[allow(dead_code)]
 pub fn event_target(event: &Value) -> &str {
     event
         .get("target")

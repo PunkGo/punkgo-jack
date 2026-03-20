@@ -15,10 +15,6 @@ mod mcp;
 mod presence;
 mod report;
 mod roast;
-mod roast_analysis;
-mod roast_assets;
-mod roast_config;
-mod roast_render;
 mod session;
 mod setup;
 mod spillover;
@@ -58,7 +54,7 @@ fn print_usage() {
          \x20 show <EVENT_ID>         Show full details of a single event\n\
          \x20 receipt [SESSION_ID]    Generate session receipt\n\
          \x20 report [SESSION_ID]     Generate turn-based session report\n\
-         \x20 roast [OPTIONS]        AI personality diagnosis receipt\n\
+         \x20 roast [OPTIONS]        AI personality roast (try: roast help)\n\
          \x20 presence [DAYS]         Show collaboration heatmap (default: 14 days)\n\
          \x20 statusline on|off       Toggle energy statusline (Claude Code only)\n\
          \x20 anchor [OPTIONS]        Anchor latest checkpoint to TSA\n\

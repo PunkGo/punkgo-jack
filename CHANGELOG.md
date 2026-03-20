@@ -4,6 +4,65 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.5.4] - 2026-03-20
+
+### Added
+
+- **`punkgo-jack roast` command** — AI personality diagnosis based on your coding session data
+- **Analysis engine** — personality typing, RPG stat generation (six meme-named axes: Yapping/Googling/Grinding/Shipping/Tunnel Vision/Plot Armor), worst-moment extraction
+- **16 MBTI dog breed personalities** — config-driven via `roast_config.toml`, each with breed name, catchphrase, quips, and background color
+- **103 quip templates** — randomized meme sentences per personality type
+- **SVG card rendering** — Personality Card (400x520) and Vibe Card (400x320) with dog image embedding, radar chart, CSS animations
+- **PNG export** — `--png` / `--svg` direct file output via `resvg` with inline styles for compatibility
+- **JSON output** — `--json` flag for programmatic consumption
+- **Time range filters** — `--today`, `--week`, `--month` session scoping
+- **`roast help` subcommand** — usage guide
+- **Shared `data_fetch` module** — extracted from `export.rs` for reuse across roast and export commands
+- **16 dog images** — `assets/dogs/dog-{name}.png`, compiled via `include_bytes!`
+
+### Fixed
+
+- Strip BOM prefix in CTA text for natural English ("the" prefix removal)
+- PNG rendering: inline styles for `resvg` compatibility (external CSS not supported)
+- Session exit tips removed — `CONOUT$`/`/dev/tty` unreliable with async hooks
+
+## [0.5.3] - 2026-03-17
+
+### Fixed
+
+- **Fix setup hang on macOS** — `punkgo-kerneld` has no `--version` flag; calling it started a full daemon that never exits, hanging `punkgo-jack setup` (macOS advisory flock doesn't prevent duplicate daemons). Removed `check_kernel_version()` and `parse_major_minor()` entirely. IPC protocol (`punkgo-core`) ensures wire compatibility.
+
+## [0.5.2] - 2026-03-16
+
+### Added
+
+- **10 hook events** — added Stop, SubagentStart, SubagentStop, Notification (Claude Code 6→10, Cursor 6→9)
+- Claude Code adapter: extract `last_assistant_message`, `agent_type`, `notification_type`
+- Cursor adapter: extract `status`, `loop_count`, `modified_files`, `tool_call_count`
+- `cursor_default_response`: allow `subagentStart` permission
+- README: Dual-Tool Coexistence section (Third-party Skills handling)
+
+### Fixed
+
+- **Cursor BOM metadata loss** — Windows UTF-8 BOM (`\xEF\xBB\xBF`) in stdin caused all Cursor event metadata to be silently dropped since v0.4.1. Fixed with `strip_prefix('\u{FEFF}')` before JSON parse.
+
+### Changed
+
+- **Semantic TSA rate limit** — replaced clock-based rate limit with `tree_size` check. Anchor when tree grows, skip when unchanged, force re-anchor if TSR file lost. Removed dead code: `rate_limit_path`, `check_clock_rate_limit`, `now_epoch_secs`.
+
+## [0.5.1] - 2026-03-16
+
+### Changed
+
+- **TSA anchoring on by default** — free DigiCert public service, rate-limited to once per 5 minutes
+- Setup: print survey link (`punkgo.ai/why`) after successful setup
+- Setup: check kernel version compatibility, warn if outdated
+- README: "Why I built this" section with ICP positioning, simplified Quick Start to two commands
+
+### Fixed
+
+- `install.sh`: platform-aware install dir (`~/.punkgo/bin/` on Windows), PATH detection + guidance, skip `chmod +x` on Windows, `mkdir -p` before install
+
 ## [0.5.0] - 2026-03-16
 
 ### Added

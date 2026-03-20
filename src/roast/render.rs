@@ -1,7 +1,5 @@
-#![allow(dead_code)]
-
-use crate::roast_analysis::RoastData;
-use crate::roast_assets;
+use super::analysis::RoastData;
+use super::assets;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,7 +17,7 @@ pub fn comma(n: usize) -> String {
     let len = bytes.len();
     let mut result = String::with_capacity(len + len / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
+        if i > 0 && (len - i) % 3 == 0 {
             result.push(',');
         }
         result.push(b as char);
@@ -89,7 +87,7 @@ pub fn render_cli(data: &RoastData) -> String {
     out.push_str("  ==========================================\n");
 
     // Title: personality name + MBTI + dog breed
-    let name = roast_assets::short_name(&data.personality.name);
+    let name = assets::short_name(&data.personality.name);
     out.push_str(&format!(
         "    {} \u{00b7} {} \u{00b7} {}\n",
         name, data.personality.mbti, data.personality.dog_breed
@@ -140,15 +138,15 @@ pub fn render_json(data: &RoastData) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn render_personality_svg(data: &RoastData) -> String {
-    let accent = roast_assets::accent_color(&data.personality.id);
+    let accent = assets::accent_color(&data.personality.id);
     let bg = &data.personality.card_color;
-    let name = roast_assets::short_name(&data.personality.name);
+    let name = assets::short_name(&data.personality.name);
     let mbti = &data.personality.mbti;
     let quip_safe = xml_escape(&data.quip);
     let catch_safe = xml_escape(&data.personality.catchphrase);
 
     // Dog image
-    let dog_b64 = roast_assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
+    let dog_b64 = assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
 
     // Radar polygon
     let radar_values: Vec<f64> = data
@@ -281,14 +279,14 @@ pub fn render_personality_svg(data: &RoastData) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn render_vibe_svg(data: &RoastData) -> String {
-    let accent = roast_assets::accent_color(&data.personality.id);
+    let accent = assets::accent_color(&data.personality.id);
     let bg = &data.personality.card_color;
-    let name = roast_assets::short_name(&data.personality.name);
+    let name = assets::short_name(&data.personality.name);
     let mbti = &data.personality.mbti;
     let quip_safe = xml_escape(&data.quip);
     let catch_safe = xml_escape(&data.personality.catchphrase);
 
-    let dog_b64 = roast_assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
+    let dog_b64 = assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
 
     let footer = format!(
         "{total} events - punkgo.ai/roast",
@@ -345,11 +343,10 @@ pub fn render_vibe_svg(data: &RoastData) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Unified render_svg: dispatches based on is_today flag
+// Test-only helpers
 // ---------------------------------------------------------------------------
 
-/// Render SVG card. If `today` is true, renders a compact Vibe Card (400x320).
-/// Otherwise renders a full Personality Card (400x520) with radar chart.
+#[cfg(test)]
 pub fn render_svg(data: &RoastData) -> String {
     render_personality_svg(data)
 }
@@ -366,14 +363,14 @@ const PNG_FONT_BODY: &str = "Segoe UI, Arial, Helvetica, sans-serif";
 /// No `<style>` block, no CSS classes, no animations — every style is an
 /// inline attribute so resvg can render it without font-fetching or CSS parsing.
 pub fn render_personality_svg_for_png(data: &RoastData) -> String {
-    let accent = roast_assets::accent_color(&data.personality.id);
+    let accent = assets::accent_color(&data.personality.id);
     let bg = &data.personality.card_color;
-    let name = roast_assets::short_name(&data.personality.name);
+    let name = assets::short_name(&data.personality.name);
     let mbti = &data.personality.mbti;
     let quip_safe = xml_escape(&data.quip);
     let catch_safe = xml_escape(&data.personality.catchphrase);
 
-    let dog_b64 = roast_assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
+    let dog_b64 = assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
 
     // Radar polygon
     let radar_values: Vec<f64> = data
@@ -482,14 +479,14 @@ pub fn render_personality_svg_for_png(data: &RoastData) -> String {
 
 /// Render a fully-inlined vibe card SVG for PNG export.
 pub fn render_vibe_svg_for_png(data: &RoastData) -> String {
-    let accent = roast_assets::accent_color(&data.personality.id);
+    let accent = assets::accent_color(&data.personality.id);
     let bg = &data.personality.card_color;
-    let name = roast_assets::short_name(&data.personality.name);
+    let name = assets::short_name(&data.personality.name);
     let mbti = &data.personality.mbti;
     let quip_safe = xml_escape(&data.quip);
     let catch_safe = xml_escape(&data.personality.catchphrase);
 
-    let dog_b64 = roast_assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
+    let dog_b64 = assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
 
     let footer = format!(
         "{total} events - punkgo.ai/roast",
@@ -534,10 +531,9 @@ pub fn render_vibe_svg_for_png(data: &RoastData) -> String {
     )
 }
 
-// Keep legacy static functions for backward compatibility (used in tests)
+// Test-only: strip animations for assertion tests
 
-/// Strip CSS animations and set all animated elements to their final visible state.
-/// This produces a static SVG suitable for rasterization with resvg.
+#[cfg(test)]
 fn make_static_svg(svg: &str) -> String {
     // Remove the entire <defs><style>...</style></defs> block
     let s = if let (Some(start), Some(end)) = (svg.find("<defs>"), svg.find("</defs>")) {
@@ -555,7 +551,7 @@ fn make_static_svg(svg: &str) -> String {
     s.replace("DM Sans, sans-serif", "sans-serif")
 }
 
-/// Remove all class="..." attributes from SVG elements.
+#[cfg(test)]
 fn remove_class_attrs(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut rest = s;
@@ -580,12 +576,12 @@ fn remove_class_attrs(s: &str) -> String {
     result
 }
 
-/// Render a static personality card SVG (no animations, all elements visible).
+#[cfg(test)]
 pub fn render_personality_svg_static(data: &RoastData) -> String {
     make_static_svg(&render_personality_svg(data))
 }
 
-/// Render a static vibe card SVG (no animations, all elements visible).
+#[cfg(test)]
 pub fn render_vibe_svg_static(data: &RoastData) -> String {
     make_static_svg(&render_vibe_svg(data))
 }
@@ -627,8 +623,8 @@ pub fn render_png(data: &RoastData, today: bool, scale: u32) -> anyhow::Result<V
 
 #[cfg(test)]
 mod tests {
+    use super::super::analysis::*;
     use super::*;
-    use crate::roast_analysis::*;
 
     fn sample_data() -> RoastData {
         RoastData {

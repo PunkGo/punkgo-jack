@@ -1,13 +1,11 @@
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use chrono::Timelike;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::config::{self, PersonalityConfig, RoastConfig, RoastMetrics, TraitConfig};
 use crate::data_fetch;
-use crate::roast_config::{self, PersonalityConfig, RoastConfig, RoastMetrics, TraitConfig};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -57,11 +55,6 @@ impl MatchedTrait {
             emoji: t.emoji.clone(),
         }
     }
-
-    /// Display label with emoji suffix (e.g. "Nocturnal 🌙").
-    pub fn display_label(&self) -> String {
-        format!("{} {}", self.label, self.emoji)
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,7 +100,7 @@ pub struct RoastData {
 // Core analysis (config-driven)
 // ---------------------------------------------------------------------------
 
-pub fn analyze_events(events: &[Value], config: &RoastConfig) -> RoastData {
+pub fn analyze_events(events: &[Value], cfg: &RoastConfig) -> RoastData {
     let total_events = events.len();
 
     let mut type_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -257,13 +250,13 @@ pub fn analyze_events(events: &[Value], config: &RoastConfig) -> RoastData {
     );
 
     // Config-driven personality matching
-    let personality_cfg = roast_config::match_personality(config, &metrics);
+    let personality_cfg = config::match_personality(cfg, &metrics);
     let personality = MatchedPersonality::from_config(personality_cfg);
-    let quip = roast_config::select_quip(personality_cfg, &metrics);
-    let radar = roast_config::compute_radar(config, personality_cfg, &metrics);
+    let quip = config::select_quip(personality_cfg, &metrics);
+    let radar = config::compute_radar(cfg, personality_cfg, &metrics);
 
     // Config-driven trait matching
-    let trait_cfgs = roast_config::match_traits(config, &metrics);
+    let trait_cfgs = config::match_traits(cfg, &metrics);
     let traits: Vec<MatchedTrait> = trait_cfgs
         .into_iter()
         .map(MatchedTrait::from_config)
@@ -418,7 +411,7 @@ mod tests {
     use serde_json::json;
 
     fn test_config() -> RoastConfig {
-        roast_config::load_roast_config().unwrap()
+        config::load_roast_config().unwrap()
     }
 
     fn make_event(event_type: &str, ts_ms: u64, target: &str) -> Value {

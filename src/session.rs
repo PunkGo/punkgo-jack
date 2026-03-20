@@ -55,14 +55,6 @@ pub fn record_event(claude_session_id: &str, settled_cost: u64) -> Result<()> {
     Ok(())
 }
 
-/// Read today's total energy consumption across all sessions.
-/// Currently read by the statusline shell script (reads daily_energy.json directly);
-/// this Rust API is kept for future CLI/MCP use.
-#[allow(dead_code)]
-pub fn daily_energy_total() -> u64 {
-    read_daily_energy().unwrap_or(0)
-}
-
 /// End the current session. Returns the final state and removes the session file.
 pub fn end_session(claude_session_id: &str) -> Result<SessionState> {
     end_session_in(&session_file_path(claude_session_id)?)
@@ -231,19 +223,6 @@ fn add_daily_energy(cost: u64) -> Result<()> {
     let content = serde_json::to_string(&de)?;
     std::fs::write(&path, content.as_bytes())?;
     Ok(())
-}
-
-fn read_daily_energy() -> Result<u64> {
-    let path = daily_energy_path()?;
-    if !path.exists() {
-        return Ok(0);
-    }
-    let content = std::fs::read_to_string(&path)?;
-    let de: DailyEnergy = serde_json::from_str(&content)?;
-    if de.date != today_str() {
-        return Ok(0);
-    }
-    Ok(de.energy)
 }
 
 fn write_session(path: &Path, state: &SessionState) -> Result<()> {

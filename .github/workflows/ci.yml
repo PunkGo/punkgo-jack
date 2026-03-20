@@ -15,6 +15,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-features -- -D warnings
+      - name: cargo check
+        run: cargo check
+      - name: cargo test
+        run: cargo test
+      - name: cargo test (all features)
+        run: cargo test --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.83.0
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
       - name: cargo check
         run: cargo check
       - name: cargo test
