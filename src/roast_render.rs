@@ -279,7 +279,7 @@ pub fn render_personality_svg(data: &RoastData) -> String {
 
     // Stats line
     let stats_line = format!(
-        "Since {period} days -- {total} events",
+        "{total} events -- past {period} days",
         period = data.period_days,
         total = comma(data.total_events),
     );
@@ -311,7 +311,7 @@ pub fn render_personality_svg(data: &RoastData) -> String {
   </style></defs>
 
   <rect width="400" height="520" rx="20" fill="{bg}"/>
-  <text class="tp" x="200" y="18" text-anchor="middle" fill="#9A9A92" font-family="DM Sans, sans-serif" font-size="11" font-weight="600" letter-spacing="3">TRUE PERSONALITY</text>
+  <text class="tp" x="200" y="18" text-anchor="middle" fill="#9A9A92" font-family="DM Sans, sans-serif" font-size="11" font-weight="600" letter-spacing="3">PUNKGO ROAST</text>
   <text class="t" x="200" y="46" text-anchor="middle" fill="#1A1A1A" font-family="Bricolage Grotesque, sans-serif" font-size="30" font-weight="800">{name}</text>
   <text class="m" x="200" y="64" text-anchor="middle" fill="{accent}" font-family="DM Sans, sans-serif" font-size="13" font-weight="600" letter-spacing="4">{mbti}</text>
   <image class="d" x="135" y="70" width="130" height="130" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,{dog_b64}"/>
@@ -326,11 +326,10 @@ pub fn render_personality_svg(data: &RoastData) -> String {
 {dots}    </g>
   </g>
 
-  <text class="q" x="200" y="412" text-anchor="middle" fill="#1A1A1A" font-family="DM Sans, sans-serif" font-size="15" font-weight="700">{quip}</text>
+  <text class="q" x="200" y="412" text-anchor="middle" fill="#1A1A1A" font-family="DM Sans, sans-serif" font-size="16" font-weight="700">{quip}</text>
   <text class="q" x="200" y="434" text-anchor="middle" fill="{accent}" font-family="DM Sans, sans-serif" font-size="12" font-style="italic">&quot;{catch}&quot;</text>
-  <text class="st" x="200" y="458" text-anchor="middle" fill="#B0B0A8" font-family="DM Sans, sans-serif" font-size="9">{stats}</text>
-  <text class="b" x="200" y="480" text-anchor="middle" fill="#9A9A92" font-family="DM Sans, sans-serif" font-size="12" font-weight="600">What kind of dog is your AI?</text>
-  <text class="b" x="200" y="498" text-anchor="middle" fill="{accent}" font-family="DM Sans, sans-serif" font-size="12">Find out at punkgo.ai/roast</text>
+  <text class="st" x="200" y="462" text-anchor="middle" fill="#A8A8A0" font-family="DM Sans, sans-serif" font-size="9">{stats}</text>
+  <text class="b" x="200" y="500" text-anchor="middle" fill="{accent}" font-family="DM Sans, sans-serif" font-size="10" font-weight="600">What kind of dog is your AI? punkgo.ai/roast</text>
 </svg>"##,
         accent = accent,
         bg = bg,
