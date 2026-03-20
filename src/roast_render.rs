@@ -84,119 +84,49 @@ pub fn render_cli(data: &RoastData) -> String {
     let mut out = String::new();
 
     // Header
-    out.push_str("  ========================================\n");
-    out.push_str("      PUNKGO ROAST RECEIPT\n");
-    out.push_str("  ========================================\n");
+    out.push_str("  ==========================================\n");
+    out.push_str("      PUNKGO ROAST\n");
+    out.push_str("  ==========================================\n");
+
+    // Title: personality name + MBTI + dog breed
+    let name = roast_assets::short_name(&data.personality.name);
     out.push_str(&format!(
-        "    Period: {} days | {} events\n",
-        data.period_days,
-        comma(data.total_events)
+        "    {} \u{00b7} {} \u{00b7} {}\n",
+        name, data.personality.mbti, data.personality.dog_breed
     ));
     out.push('\n');
 
-    // Personality
-    out.push_str("    -- YOUR AI IS --\n");
-    out.push('\n');
-    out.push_str(&format!(
-        "       {} {}\n",
-        data.personality.emoji, data.personality.name
-    ));
-
-    // Traits
-    let trait_labels: Vec<String> = data.traits.iter().map(|t| t.display_label()).collect();
-    if !trait_labels.is_empty() {
-        out.push_str(&format!("       {}\n", trait_labels.join(" . ")));
-    }
-    out.push('\n');
-    out.push_str(&format!("       \"{}\"\n", data.quip));
-    out.push('\n');
-
-    // RPG Stats
-    out.push_str("    -- STATS --\n");
-    out.push('\n');
-    out.push_str(&format!(
-        "    STR {}  {}\n",
-        bar(data.rpg.str_val),
-        data.rpg.str_val
-    ));
-    out.push_str(&format!(
-        "    INT {}  {}\n",
-        bar(data.rpg.int_val),
-        data.rpg.int_val
-    ));
-    out.push_str(&format!(
-        "    DEX {}  {}\n",
-        bar(data.rpg.dex_val),
-        data.rpg.dex_val
-    ));
-    out.push_str(&format!(
-        "    LUK {}  {}\n",
-        bar(data.rpg.luk_val),
-        data.rpg.luk_val
-    ));
-    out.push_str(&format!(
-        "    CHA {}  {}\n",
-        bar(data.rpg.cha_val),
-        data.rpg.cha_val
-    ));
-    out.push('\n');
-
-    // Evidence
-    out.push_str("    -- THE EVIDENCE --\n");
-    out.push('\n');
-
-    let evidence_rows: &[(&str, &str)] = &[
-        ("command_execution", "Bash commands"),
-        ("file_read", "File reads"),
-        ("web_search", "Web searches"),
-        ("file_edit", "File edits"),
-        ("content_search", "Content greps"),
-        ("file_write", "File writes"),
+    // Radar: six meme-named dimensions
+    let radar_labels = [
+        "Yapping",
+        "Googling",
+        "Grinding",
+        "Shipping",
+        "Tunnel Vision",
+        "Plot Armor",
     ];
-
-    for (key, label) in evidence_rows {
-        let count = data.type_counts.get(*key).copied().unwrap_or(0);
-        out.push_str(&format!("    {:<26} {:>7}\n", label, comma(count)));
+    for (i, label) in radar_labels.iter().enumerate() {
+        let val = data.radar.get(i).map(|(_, v)| *v as u8).unwrap_or(50);
+        out.push_str(&format!("    {:<14}{} {:>3}\n", label, bar(val), val));
     }
-    out.push_str("    ------------------------------\n");
-    out.push_str(&format!(
-        "    {:<26} {:>7}\n",
-        "TOTAL",
-        comma(data.total_events)
-    ));
-    out.push_str(&format!(
-        "    {:<26} {:>6.2}%\n",
-        "FAIL RATE", data.fail_rate
-    ));
     out.push('\n');
 
-    // Worst Moments
-    out.push_str("    -- WORST MOMENTS --\n");
+    // Quip (config-driven)
+    out.push_str(&format!("    \"{}\"\n", data.quip));
     out.push('\n');
-    for (i, moment) in data.worst_moments.iter().enumerate() {
-        out.push_str(&format!(
-            "    {}. {}\n       {}\n",
-            i + 1,
-            moment.description,
-            moment.detail
-        ));
-        out.push('\n');
-    }
 
-    // Merkle
-    if let Some(ref hash) = data.merkle_root {
-        let short: String = hash.chars().take(20).collect();
-        out.push_str(&format!("    {}...  (merkle)\n", short));
-        out.push('\n');
-    }
+    // Catchphrase (from personality config)
+    out.push_str(&format!("    \"{}\"\n", data.personality.catchphrase));
+    out.push('\n');
 
-    // CTA
-    let name_lower = data.personality.name.to_lowercase();
-    let name_short = name_lower.strip_prefix("the ").unwrap_or(&name_lower);
-    out.push_str(&format!("    Your AI is a {}.\n", name_short));
-    out.push_str("    What's yours?\n");
-    out.push_str("    > punkgo.ai/roast\n");
-    out.push_str("  ========================================\n");
+    // Stats + CTA
+    out.push_str(&format!(
+        "    {} events -- past {} days\n",
+        comma(data.total_events),
+        data.period_days
+    ));
+    out.push_str("    What kind of dog is your AI? punkgo.ai/roast\n");
+    out.push_str("  ==========================================\n");
 
     out
 }
@@ -425,6 +355,93 @@ pub fn render_svg(data: &RoastData) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Static SVG (no animations, for PNG rendering)
+// ---------------------------------------------------------------------------
+
+/// Strip CSS animations and set all animated elements to their final visible state.
+/// This produces a static SVG suitable for rasterization with resvg.
+fn make_static_svg(svg: &str) -> String {
+    // Remove the entire <defs><style>...</style></defs> block
+    let s = if let (Some(start), Some(end)) = (svg.find("<defs>"), svg.find("</defs>")) {
+        let end = end + "</defs>".len();
+        format!("{}{}", &svg[..start], &svg[end..])
+    } else {
+        svg.to_string()
+    };
+
+    // Remove class attributes (they reference the deleted animations)
+    let s = remove_class_attrs(&s);
+
+    // Fix font-family: replace fancy fonts with sans-serif for resvg compatibility
+    let s = s.replace("Bricolage Grotesque, sans-serif", "sans-serif");
+    s.replace("DM Sans, sans-serif", "sans-serif")
+}
+
+/// Remove all class="..." attributes from SVG elements.
+fn remove_class_attrs(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find("class=\"") {
+        result.push_str(&rest[..pos]);
+        let after = &rest[pos + 7..]; // skip `class="`
+        if let Some(end) = after.find('"') {
+            // Also eat a trailing space if present
+            let skip = if after.as_bytes().get(end + 1) == Some(&b' ') {
+                end + 2
+            } else {
+                end + 1
+            };
+            rest = &after[skip..];
+        } else {
+            // Malformed, just keep going
+            result.push_str("class=\"");
+            rest = after;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Render a static personality card SVG (no animations, all elements visible).
+pub fn render_personality_svg_static(data: &RoastData) -> String {
+    make_static_svg(&render_personality_svg(data))
+}
+
+/// Render a static vibe card SVG (no animations, all elements visible).
+pub fn render_vibe_svg_static(data: &RoastData) -> String {
+    make_static_svg(&render_vibe_svg(data))
+}
+
+// ---------------------------------------------------------------------------
+// PNG rendering (behind feature flag)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "roast-png")]
+pub fn render_png(data: &RoastData, today: bool, scale: u32) -> anyhow::Result<Vec<u8>> {
+    let svg_str = if today {
+        render_vibe_svg_static(data)
+    } else {
+        render_personality_svg_static(data)
+    };
+
+    let opts = usvg::Options::default();
+    let tree = usvg::Tree::from_str(&svg_str, &opts)?;
+
+    let size = tree.size();
+    let w = (size.width() * scale as f32) as u32;
+    let h = (size.height() * scale as f32) as u32;
+
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)
+        .ok_or_else(|| anyhow::anyhow!("failed to create pixmap {w}x{h}"))?;
+
+    let transform = tiny_skia::Transform::from_scale(scale as f32, scale as f32);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    let png_data = pixmap.encode_png()?;
+    Ok(png_data)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -499,24 +516,57 @@ mod tests {
     #[test]
     fn cli_render_contains_personality() {
         let out = render_cli(&sample_data());
-        assert!(out.contains("THE PHILOSOPHER"));
+        assert!(out.contains("PHILOSOPHER"));
+        assert!(out.contains("INTP"));
+        assert!(out.contains("Border Collie"));
         assert!(out.contains("Existential crisis"));
     }
 
     #[test]
-    fn cli_render_contains_rpg() {
+    fn cli_render_contains_radar() {
         let out = render_cli(&sample_data());
-        assert!(out.contains("STR"));
-        assert!(out.contains("INT"));
+        assert!(out.contains("Yapping"));
+        assert!(out.contains("Googling"));
+        assert!(out.contains("Grinding"));
+        assert!(out.contains("Shipping"));
+        assert!(out.contains("Tunnel Vision"));
+        assert!(out.contains("Plot Armor"));
     }
 
     #[test]
-    fn cli_render_uses_actual_personality_in_cta() {
-        let mut data = sample_data();
-        data.personality.id = "brute".into();
-        data.personality.name = "THE BRUTE".into();
-        let out = render_cli(&data);
-        assert!(out.contains("a brute"));
+    fn cli_render_no_rpg_stats() {
+        let out = render_cli(&sample_data());
+        assert!(!out.contains("STR"));
+        assert!(!out.contains("DEX"));
+        assert!(!out.contains("LUK"));
+        assert!(!out.contains("CHA"));
+    }
+
+    #[test]
+    fn cli_render_no_worst_moments() {
+        let out = render_cli(&sample_data());
+        assert!(!out.contains("WORST MOMENTS"));
+        assert!(!out.contains("merkle"));
+    }
+
+    #[test]
+    fn cli_render_has_catchphrase() {
+        let out = render_cli(&sample_data());
+        assert!(out.contains("This needs more research."));
+    }
+
+    #[test]
+    fn cli_render_has_cta() {
+        let out = render_cli(&sample_data());
+        assert!(out.contains("What kind of dog is your AI?"));
+        assert!(out.contains("punkgo.ai/roast"));
+    }
+
+    #[test]
+    fn cli_render_has_stats_line() {
+        let out = render_cli(&sample_data());
+        assert!(out.contains("1,000 events"));
+        assert!(out.contains("past 7 days"));
     }
 
     #[test]
@@ -679,5 +729,103 @@ mod tests {
         let (x, y) = polar(100.0, 90.0);
         assert!((x - 200.0).abs() < 1.0);
         assert!((y - 245.0).abs() < 1.0);
+    }
+
+    // -- Static SVG tests --
+
+    #[test]
+    fn static_svg_has_no_animations() {
+        let svg = render_personality_svg_static(&sample_data());
+        assert!(svg.starts_with("<svg"));
+        assert!(svg.ends_with("</svg>"));
+        assert!(
+            !svg.contains("@keyframes"),
+            "static SVG should not contain animations"
+        );
+        assert!(
+            !svg.contains("animation:"),
+            "static SVG should not contain animation properties"
+        );
+        assert!(
+            !svg.contains("class=\""),
+            "static SVG should not contain class attributes"
+        );
+    }
+
+    #[test]
+    fn static_svg_has_no_fancy_fonts() {
+        let svg = render_personality_svg_static(&sample_data());
+        assert!(
+            !svg.contains("Bricolage Grotesque"),
+            "static SVG should use fallback fonts"
+        );
+        assert!(
+            !svg.contains("DM Sans"),
+            "static SVG should use fallback fonts"
+        );
+        assert!(svg.contains("sans-serif"));
+    }
+
+    #[test]
+    fn static_svg_preserves_content() {
+        let svg = render_personality_svg_static(&sample_data());
+        assert!(svg.contains("PHILOSOPHER"));
+        assert!(svg.contains("INTP"));
+        assert!(svg.contains("polygon"));
+        assert!(svg.contains("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn static_vibe_svg_has_no_animations() {
+        let svg = render_vibe_svg_static(&sample_data());
+        assert!(svg.starts_with("<svg"));
+        assert!(svg.ends_with("</svg>"));
+        assert!(!svg.contains("@keyframes"));
+        assert!(!svg.contains("class=\""));
+    }
+
+    #[test]
+    fn remove_class_attrs_basic() {
+        assert_eq!(
+            remove_class_attrs(r#"<text class="t" x="1">"#),
+            r#"<text x="1">"#
+        );
+        // Note: leading space before class= is preserved (harmless in SVG)
+        assert_eq!(
+            remove_class_attrs(r#"<g class="foo"><text class="bar" y="2">"#),
+            r#"<g ><text y="2">"#
+        );
+    }
+
+    // -- PNG tests (feature-gated) --
+
+    #[cfg(feature = "roast-png")]
+    #[test]
+    fn png_render_produces_valid_png() {
+        let data = sample_data();
+        let png = render_png(&data, false, 2).expect("render_png should succeed");
+        // PNG magic bytes
+        assert_eq!(
+            &png[..4],
+            &[0x89, 0x50, 0x4E, 0x47],
+            "output should be valid PNG"
+        );
+        assert!(png.len() > 1000, "PNG should have reasonable size");
+    }
+
+    #[cfg(feature = "roast-png")]
+    #[test]
+    fn png_render_vibe_card() {
+        let data = sample_data();
+        let png = render_png(&data, true, 2).expect("vibe PNG should succeed");
+        assert_eq!(&png[..4], &[0x89, 0x50, 0x4E, 0x47]);
+    }
+
+    #[cfg(feature = "roast-png")]
+    #[test]
+    fn png_render_scale_1() {
+        let data = sample_data();
+        let png = render_png(&data, false, 1).expect("scale 1 should work");
+        assert_eq!(&png[..4], &[0x89, 0x50, 0x4E, 0x47]);
     }
 }

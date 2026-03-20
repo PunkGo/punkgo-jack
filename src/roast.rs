@@ -14,6 +14,8 @@ pub struct RoastArgs {
     pub output: Option<String>,
     /// True when --today is used (renders Vibe Card instead of Personality Card).
     pub today: bool,
+    /// True when --export is used (renders PNG via resvg).
+    pub export: bool,
 }
 
 pub enum RoastFormat {
@@ -31,11 +33,13 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<RoastArgs> 
     let mut actor = None;
     let mut output = None;
     let mut today = false;
+    let mut export = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--svg" => format = RoastFormat::Svg,
             "--json" => format = RoastFormat::Json,
+            "--export" => export = true,
             "--today" => {
                 today = true;
                 days = Some(1);
@@ -69,6 +73,7 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<RoastArgs> 
         actor,
         output,
         today,
+        export,
     })
 }
 
@@ -116,6 +121,11 @@ pub fn run_roast(args: RoastArgs) -> Result<()> {
             .map(|s| s.to_string());
     }
 
+    // PNG export path
+    if args.export {
+        return export_png(&data, args.today, args.output.as_deref());
+    }
+
     let output_text = match args.format {
         RoastFormat::Cli => roast_render::render_cli(&data),
         RoastFormat::Json => roast_render::render_json(&data),
@@ -138,6 +148,52 @@ pub fn run_roast(args: RoastArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "roast-png")]
+fn export_png(data: &roast_analysis::RoastData, today: bool, output: Option<&str>) -> Result<()> {
+    use crate::roast_render;
+
+    let scale = 2;
+    let png_data = roast_render::render_png(data, today, scale)?;
+
+    let path = match output {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let dir = dirs_default_png();
+            std::fs::create_dir_all(&dir)
+                .with_context(|| format!("failed to create {}", dir.display()))?;
+            dir.join("card.png")
+        }
+    };
+
+    std::fs::write(&path, &png_data)
+        .with_context(|| format!("failed to write PNG to {}", path.display()))?;
+    eprintln!("PNG saved to {}", path.display());
+    Ok(())
+}
+
+#[cfg(not(feature = "roast-png"))]
+fn export_png(
+    _data: &roast_analysis::RoastData,
+    _today: bool,
+    _output: Option<&str>,
+) -> Result<()> {
+    anyhow::bail!(
+        "--export requires the 'roast-png' feature. Rebuild with: cargo build --features roast-png"
+    );
+}
+
+/// Default output directory for PNG exports: ~/.punkgo/roast/
+fn dirs_default_png() -> std::path::PathBuf {
+    dirs_home().join(".punkgo").join("roast")
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +207,7 @@ mod tests {
         assert!(parsed.actor.is_none());
         assert!(parsed.output.is_none());
         assert!(!parsed.today);
+        assert!(!parsed.export);
     }
 
     #[test]
@@ -204,6 +261,35 @@ mod tests {
         let parsed = parse_args(&mut args).unwrap();
         assert!(parsed.today);
         assert!(matches!(parsed.format, RoastFormat::Svg));
+        assert_eq!(parsed.days, Some(1));
+    }
+
+    #[test]
+    fn parse_args_export() {
+        let mut args = vec!["--export".to_string()].into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert!(parsed.export);
+    }
+
+    #[test]
+    fn parse_args_export_with_output() {
+        let mut args = vec![
+            "--export".to_string(),
+            "-o".to_string(),
+            "my-card.png".to_string(),
+        ]
+        .into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert!(parsed.export);
+        assert_eq!(parsed.output, Some("my-card.png".to_string()));
+    }
+
+    #[test]
+    fn parse_args_export_today() {
+        let mut args = vec!["--export".to_string(), "--today".to_string()].into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert!(parsed.export);
+        assert!(parsed.today);
         assert_eq!(parsed.days, Some(1));
     }
 
