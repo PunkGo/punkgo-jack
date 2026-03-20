@@ -6,3 +6,15 @@ docs
 .claude
 debug-hook.*
 campaigns/
+
+# Design artifacts (regenerable)
+design/demo-all/
+design/demo-vibe/
+design/demo-final.svg
+design/exports/
+design/*.py
+design/*.pen
+design/roast-config-design.md
+
+# Research docs (not product code)
+research/
