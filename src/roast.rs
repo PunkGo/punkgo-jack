@@ -12,6 +12,8 @@ pub struct RoastArgs {
     pub days: Option<u64>,
     pub actor: Option<String>,
     pub output: Option<String>,
+    /// True when --today is used (renders Vibe Card instead of Personality Card).
+    pub today: bool,
 }
 
 pub enum RoastFormat {
@@ -20,16 +22,30 @@ pub enum RoastFormat {
     Json,
 }
 
+/// Minimum events required to produce a meaningful roast.
+const MIN_EVENTS: usize = 10;
+
 pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<RoastArgs> {
     let mut format = RoastFormat::Cli;
     let mut days = None;
     let mut actor = None;
     let mut output = None;
+    let mut today = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--svg" => format = RoastFormat::Svg,
             "--json" => format = RoastFormat::Json,
+            "--today" => {
+                today = true;
+                days = Some(1);
+            }
+            "--week" => {
+                days = Some(7);
+            }
+            "--month" => {
+                days = Some(30);
+            }
             "--days" | "-d" => {
                 days = Some(
                     args.next()
@@ -52,6 +68,7 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<RoastArgs> 
         days,
         actor,
         output,
+        today,
     })
 }
 
@@ -81,6 +98,14 @@ pub fn run_roast(args: RoastArgs) -> Result<()> {
         return Ok(());
     }
 
+    if events.len() < MIN_EVENTS {
+        eprintln!(
+            "Not enough data yet. Keep coding! ({} events, need at least {MIN_EVENTS})",
+            events.len()
+        );
+        return Ok(());
+    }
+
     let mut data = roast_analysis::analyze_events(&events, &config);
 
     // Try to get Merkle root (best-effort)
@@ -94,7 +119,13 @@ pub fn run_roast(args: RoastArgs) -> Result<()> {
     let output_text = match args.format {
         RoastFormat::Cli => roast_render::render_cli(&data),
         RoastFormat::Json => roast_render::render_json(&data),
-        RoastFormat::Svg => roast_render::render_svg(&data),
+        RoastFormat::Svg => {
+            if args.today {
+                roast_render::render_vibe_svg(&data)
+            } else {
+                roast_render::render_personality_svg(&data)
+            }
+        }
     };
 
     if let Some(ref path) = args.output {
@@ -119,6 +150,7 @@ mod tests {
         assert!(parsed.days.is_none());
         assert!(parsed.actor.is_none());
         assert!(parsed.output.is_none());
+        assert!(!parsed.today);
     }
 
     #[test]
@@ -140,6 +172,39 @@ mod tests {
         let mut args = vec!["--days".to_string(), "7".to_string()].into_iter();
         let parsed = parse_args(&mut args).unwrap();
         assert_eq!(parsed.days, Some(7));
+    }
+
+    #[test]
+    fn parse_args_today() {
+        let mut args = vec!["--today".to_string()].into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert!(parsed.today);
+        assert_eq!(parsed.days, Some(1));
+    }
+
+    #[test]
+    fn parse_args_week() {
+        let mut args = vec!["--week".to_string()].into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert_eq!(parsed.days, Some(7));
+        assert!(!parsed.today);
+    }
+
+    #[test]
+    fn parse_args_month() {
+        let mut args = vec!["--month".to_string()].into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert_eq!(parsed.days, Some(30));
+        assert!(!parsed.today);
+    }
+
+    #[test]
+    fn parse_args_today_with_svg() {
+        let mut args = vec!["--today".to_string(), "--svg".to_string()].into_iter();
+        let parsed = parse_args(&mut args).unwrap();
+        assert!(parsed.today);
+        assert!(matches!(parsed.format, RoastFormat::Svg));
+        assert_eq!(parsed.days, Some(1));
     }
 
     #[test]
