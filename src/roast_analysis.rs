@@ -7,33 +7,61 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::data_fetch;
+use crate::roast_config::{self, PersonalityConfig, RoastConfig, RoastMetrics, TraitConfig};
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub enum Personality {
-    Philosopher,
-    Intern,
-    Rereader,
-    Perfectionist,
-    Vampire,
-    Goldfish,
-    Brute,
-    Ghost,
-    Speedrunner,
-    Googler,
+/// Matched personality data from config (serializable snapshot).
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchedPersonality {
+    pub id: String,
+    pub name: String,
+    pub mbti: String,
+    pub emoji: String,
+    pub catchphrase: String,
+    pub card_color: String,
+    pub dog_breed: String,
+    pub dog_image: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub enum Trait {
-    Nocturnal,
-    Obsessive,
-    Chatty,
-    LoneWolf,
-    Delegator,
-    Overachiever,
+impl MatchedPersonality {
+    pub fn from_config(p: &PersonalityConfig) -> Self {
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            mbti: p.mbti.clone(),
+            emoji: p.emoji.clone(),
+            catchphrase: p.catchphrase.clone(),
+            card_color: p.card_color.clone(),
+            dog_breed: p.dog_breed.clone(),
+            dog_image: p.dog_image.clone(),
+        }
+    }
+}
+
+/// Matched trait data from config (serializable snapshot).
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchedTrait {
+    pub id: String,
+    pub label: String,
+    pub emoji: String,
+}
+
+impl MatchedTrait {
+    pub fn from_config(t: &TraitConfig) -> Self {
+        Self {
+            id: t.id.clone(),
+            label: t.label.clone(),
+            emoji: t.emoji.clone(),
+        }
+    }
+
+    /// Display label with emoji suffix (e.g. "Nocturnal 🌙").
+    pub fn display_label(&self) -> String {
+        format!("{} {}", self.label, self.emoji)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,8 +84,10 @@ pub struct WorstMoment {
 pub struct RoastData {
     pub total_events: usize,
     pub period_days: u64,
-    pub personality: Personality,
-    pub traits: Vec<Trait>,
+    pub personality: MatchedPersonality,
+    pub traits: Vec<MatchedTrait>,
+    pub quip: String,
+    pub radar: Vec<(String, f64)>,
     pub rpg: RpgStats,
     pub type_counts: BTreeMap<String, usize>,
     pub fail_count: usize,
@@ -74,10 +104,10 @@ pub struct RoastData {
 }
 
 // ---------------------------------------------------------------------------
-// Core analysis
+// Core analysis (config-driven)
 // ---------------------------------------------------------------------------
 
-pub fn analyze_events(events: &[Value]) -> RoastData {
+pub fn analyze_events(events: &[Value], config: &RoastConfig) -> RoastData {
     let total_events = events.len();
 
     let mut type_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -149,7 +179,7 @@ pub fn analyze_events(events: &[Value]) -> RoastData {
         0.0
     };
 
-    // event-type helpers (read from type_counts for zero-copy)
+    // event-type helpers
     let tc = &type_counts;
     let count = |k: &str| -> usize { *tc.get(k).unwrap_or(&0) };
 
@@ -159,6 +189,9 @@ pub fn analyze_events(events: &[Value]) -> RoastData {
     let file_search = count("file_search");
     let file_write = count("file_write");
     let file_edit = count("file_edit");
+    let user_prompt = count("user_prompt");
+    let subagent_start = count("subagent_start");
+    let cmd_exec_failed = count("command_execution_failed");
 
     // think_do_ratio
     let think = (file_read + content_search + web_search + file_search) as f64;
@@ -186,34 +219,57 @@ pub fn analyze_events(events: &[Value]) -> RoastData {
         .max_by_key(|(_, &cnt)| cnt)
         .map(|(path, &cnt)| (path.clone(), cnt));
 
-    // max read count for personality checks
     let max_file_read_count = most_read_file.as_ref().map(|(_, c)| *c).unwrap_or(0);
 
-    // personality / traits / rpg
-    let personality = classify_personality(
-        think_do_ratio,
-        fail_rate,
+    // night_ratio
+    let night_events: u32 = hour_distribution[20..=23]
+        .iter()
+        .chain(hour_distribution[0..=4].iter())
+        .sum();
+    let total_hour_events: u32 = hour_distribution.iter().sum();
+    let night_ratio = if total_hour_events > 0 {
+        night_events as f64 / total_hour_events as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    let unique_files_read = file_read_counts.len();
+
+    // Build metrics for config-driven matching
+    let metrics = RoastMetrics::from_counters(
         total_events,
-        max_file_read_count,
-        edit_write_ratio,
-        &hour_distribution,
+        file_read,
+        file_write,
+        file_edit,
+        content_search,
+        web_search,
+        file_search,
+        user_prompt,
+        subagent_start,
+        cmd_exec_failed,
         session_starts,
         session_ends,
-        web_search,
-        count("command_execution_failed"),
-    );
-
-    let user_prompt = count("user_prompt");
-    let subagent_start = count("subagent_start");
-    let traits = classify_traits(
-        peak_hour,
         max_file_read_count,
-        user_prompt,
-        total_events,
-        subagent_start,
-        session_starts,
+        unique_files_read,
+        peak_hour,
+        night_ratio,
+        fail_count,
     );
 
+    // Config-driven personality matching
+    let personality_cfg = roast_config::match_personality(config, &metrics);
+    let personality = MatchedPersonality::from_config(personality_cfg);
+    let quip = roast_config::select_quip(personality_cfg, &metrics);
+    let radar = roast_config::compute_radar(config, personality_cfg, &metrics);
+
+    // Config-driven trait matching
+    let trait_cfgs = roast_config::match_traits(config, &metrics);
+    let traits: Vec<MatchedTrait> = trait_cfgs
+        .into_iter()
+        .map(MatchedTrait::from_config)
+        .collect();
+
+    // RPG stats (kept as computed, not config-driven)
     let rpg = compute_rpg(
         file_write,
         file_edit,
@@ -235,6 +291,8 @@ pub fn analyze_events(events: &[Value]) -> RoastData {
         period_days,
         personality,
         traits,
+        quip,
+        radar,
         rpg,
         type_counts,
         fail_count,
@@ -249,133 +307,6 @@ pub fn analyze_events(events: &[Value]) -> RoastData {
         peak_hour,
         merkle_root: None,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Personality classification (priority order, first match wins)
-// ---------------------------------------------------------------------------
-
-#[allow(clippy::too_many_arguments)]
-fn classify_personality(
-    think_do_ratio: f64,
-    fail_rate: f64,
-    total: usize,
-    max_file_read_count: usize,
-    edit_write_ratio: f64,
-    hour_distribution: &[u32; 24],
-    session_starts: usize,
-    session_ends: usize,
-    web_search: usize,
-    cmd_exec_failed: usize,
-) -> Personality {
-    // 1. Philosopher
-    if think_do_ratio > 2.5 {
-        return Personality::Philosopher;
-    }
-
-    // 2. Intern
-    if fail_rate > 3.0 && total > 1000 {
-        return Personality::Intern;
-    }
-
-    // 3. Rereader
-    if max_file_read_count >= 40 {
-        return Personality::Rereader;
-    }
-
-    // 4. Perfectionist
-    if edit_write_ratio > 2.0 {
-        return Personality::Perfectionist;
-    }
-
-    // 5. Vampire: hours 20-23 + 0-4 events > 50% of total
-    {
-        let night_events: u32 = hour_distribution[20..=23]
-            .iter()
-            .chain(hour_distribution[0..=4].iter())
-            .sum();
-        let total_hour_events: u32 = hour_distribution.iter().sum();
-        if total_hour_events > 0 && (night_events as f64 / total_hour_events as f64) > 0.5 {
-            return Personality::Vampire;
-        }
-    }
-
-    // 6. Goldfish: Phase 2: sliding window
-    // (skipped)
-
-    // 7. Brute: command_execution_failed >= 10
-    // Phase 2: consecutive detection
-    if cmd_exec_failed >= 10 {
-        return Personality::Brute;
-    }
-
-    // 8. Ghost
-    if session_starts > 0 {
-        let ghost_ratio = (session_starts as f64 - session_ends as f64) / session_starts as f64;
-        if ghost_ratio > 0.3 {
-            return Personality::Ghost;
-        }
-    }
-
-    // 9. Speedrunner: Phase 2: per-minute peak
-    // (skipped)
-
-    // 10. Googler
-    if total > 0 && (web_search as f64 / total as f64) > 0.15 {
-        return Personality::Googler;
-    }
-
-    // Fallback
-    Personality::Philosopher
-}
-
-// ---------------------------------------------------------------------------
-// Trait classification (max 2)
-// ---------------------------------------------------------------------------
-
-fn classify_traits(
-    peak_hour: u8,
-    max_file_read_count: usize,
-    user_prompt: usize,
-    total: usize,
-    subagent_start: usize,
-    session_starts: usize,
-) -> Vec<Trait> {
-    let mut candidates: Vec<Trait> = Vec::new();
-
-    // Nocturnal
-    if peak_hour >= 20 || peak_hour <= 3 {
-        candidates.push(Trait::Nocturnal);
-    }
-
-    // Obsessive
-    if max_file_read_count >= 30 {
-        candidates.push(Trait::Obsessive);
-    }
-
-    // Chatty
-    if total > 0 && (user_prompt as f64 / total as f64) > 0.10 {
-        candidates.push(Trait::Chatty);
-    }
-
-    // Overachiever: total / prompts > 30
-    let prompts = user_prompt.max(1);
-    if total as f64 / prompts as f64 > 30.0 {
-        candidates.push(Trait::Overachiever);
-    }
-
-    // LoneWolf
-    if total > 100 && subagent_start == 0 {
-        candidates.push(Trait::LoneWolf);
-    }
-
-    // Delegator
-    if session_starts > 0 && (subagent_start as f64 / session_starts as f64) > 0.5 {
-        candidates.push(Trait::Delegator);
-    }
-
-    candidates.truncate(2);
-    candidates
 }
 
 // ---------------------------------------------------------------------------
@@ -397,14 +328,12 @@ fn compute_rpg(
 ) -> RpgStats {
     let total_f = total as f64;
 
-    // STR: (writes + edits) / total * 300, capped at 100
     let str_val = if total_f > 0.0 {
         ((file_write + file_edit) as f64 / total_f * 300.0).min(100.0) as u8
     } else {
         0
     };
 
-    // INT: (reads + searches) / total * 200, capped at 100
     let int_val = if total_f > 0.0 {
         ((file_read + content_search + web_search + file_search) as f64 / total_f * 200.0)
             .min(100.0) as u8
@@ -412,13 +341,10 @@ fn compute_rpg(
         0
     };
 
-    // DEX: 50 (placeholder, Phase 2)
     let dex_val: u8 = 50;
 
-    // LUK: (100 - fail_rate * 10), clamped 0-100
     let luk_val = (100.0 - fail_rate * 10.0).clamp(0.0, 100.0) as u8;
 
-    // CHA: (prompts / sessions * 5), capped at 100
     let cha_val = if session_starts > 0 {
         (user_prompt as f64 / session_starts as f64 * 5.0).min(100.0) as u8
     } else {
@@ -446,7 +372,6 @@ fn detect_worst_moments(
 ) -> Vec<WorstMoment> {
     let mut moments: Vec<WorstMoment> = Vec::new();
 
-    // Most-read file if count >= 10
     if let Some((path, count)) = most_read_file {
         if *count >= 10 {
             let filename = std::path::Path::new(path)
@@ -461,7 +386,6 @@ fn detect_worst_moments(
         }
     }
 
-    // Ghost sessions if > 2
     let ghost_count = session_starts.saturating_sub(session_ends);
     if ghost_count > 2 {
         moments.push(WorstMoment {
@@ -471,7 +395,6 @@ fn detect_worst_moments(
         });
     }
 
-    // Total failures if > 5
     if fail_count > 5 {
         moments.push(WorstMoment {
             description: format!("{fail_count} failed operations"),
@@ -480,7 +403,6 @@ fn detect_worst_moments(
         });
     }
 
-    // Sort descending by count
     moments.sort_by(|a, b| b.count.cmp(&a.count));
     moments.truncate(3);
     moments
@@ -494,6 +416,10 @@ fn detect_worst_moments(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn test_config() -> RoastConfig {
+        roast_config::load_roast_config().unwrap()
+    }
 
     fn make_event(event_type: &str, ts_ms: u64, target: &str) -> Value {
         json!({
@@ -521,6 +447,7 @@ mod tests {
 
     #[test]
     fn philosopher_when_think_do_high() {
+        let config = test_config();
         let events = make_events(&[
             ("file_read", 100),
             ("web_search", 50),
@@ -528,37 +455,43 @@ mod tests {
             ("file_edit", 10),
             ("command_execution", 50),
         ]);
-        let data = analyze_events(&events);
-        assert_eq!(data.personality, Personality::Philosopher);
+        let data = analyze_events(&events, &config);
+        assert_eq!(data.personality.id, "philosopher");
     }
 
     #[test]
     fn intern_when_high_fail_rate() {
+        let config = test_config();
         let events = make_events(&[
             ("file_read", 500),
             ("file_write", 200),
             ("command_execution", 300),
             ("command_execution_failed", 100),
         ]);
-        let data = analyze_events(&events);
-        assert_eq!(data.personality, Personality::Intern);
+        let data = analyze_events(&events, &config);
+        assert_eq!(data.personality.id, "intern");
     }
 
     #[test]
     fn rpg_luk_inversely_related_to_fail_rate() {
+        let config = test_config();
         let events = make_events(&[("file_read", 100)]);
-        let data = analyze_events(&events);
+        let data = analyze_events(&events, &config);
         assert!(data.rpg.luk_val > 90);
     }
 
     #[test]
     fn worst_moments_sorted_by_count() {
-        let data = analyze_events(&make_events(&[
-            ("file_read", 200),
-            ("command_execution_failed", 30),
-            ("session_start", 10),
-            ("session_end", 3),
-        ]));
+        let config = test_config();
+        let data = analyze_events(
+            &make_events(&[
+                ("file_read", 200),
+                ("command_execution_failed", 30),
+                ("session_start", 10),
+                ("session_end", 3),
+            ]),
+            &config,
+        );
         assert!(!data.worst_moments.is_empty());
         for w in data.worst_moments.windows(2) {
             assert!(w[0].count >= w[1].count);
@@ -567,37 +500,55 @@ mod tests {
 
     #[test]
     fn personality_priority_philosopher_over_rereader() {
-        // Both should trigger, but Philosopher has higher priority
+        let config = test_config();
         let mut events = make_events(&[
             ("file_read", 150),
             ("web_search", 50),
             ("file_write", 20),
             ("file_edit", 10),
         ]);
-        // Make 50 of the reads target the same file to trigger Rereader
         for e in events.iter_mut().take(50) {
             e["target"] = json!("hook/file:src/setup.rs");
         }
-        let data = analyze_events(&events);
-        assert_eq!(data.personality, Personality::Philosopher);
+        let data = analyze_events(&events, &config);
+        assert_eq!(data.personality.id, "philosopher");
     }
 
     #[test]
     fn empty_events_returns_defaults() {
-        let data = analyze_events(&[]);
+        let config = test_config();
+        let data = analyze_events(&[], &config);
         assert_eq!(data.total_events, 0);
-        assert_eq!(data.personality, Personality::Philosopher); // fallback
+        // Fallback: first personality in config (philosopher)
+        assert_eq!(data.personality.id, "philosopher");
     }
 
     #[test]
     fn traits_max_two() {
+        let config = test_config();
         let events = make_events(&[
             ("file_read", 100),
             ("user_prompt", 50),
             ("file_write", 10),
             ("subagent_start", 0),
         ]);
-        let data = analyze_events(&events);
+        let data = analyze_events(&events, &config);
         assert!(data.traits.len() <= 2);
+    }
+
+    #[test]
+    fn quip_is_non_empty() {
+        let config = test_config();
+        let events = make_events(&[("file_read", 100), ("web_search", 50), ("file_write", 20)]);
+        let data = analyze_events(&events, &config);
+        assert!(!data.quip.is_empty());
+    }
+
+    #[test]
+    fn radar_has_six_dimensions() {
+        let config = test_config();
+        let events = make_events(&[("file_read", 100), ("web_search", 50), ("file_write", 20)]);
+        let data = analyze_events(&events, &config);
+        assert_eq!(data.radar.len(), 6);
     }
 }

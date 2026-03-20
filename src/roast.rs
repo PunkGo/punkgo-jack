@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::data_fetch;
 use crate::ipc_client::IpcClient;
 use crate::roast_analysis;
+use crate::roast_config;
 use crate::roast_render;
 
 pub struct RoastArgs {
@@ -55,6 +56,7 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<RoastArgs> 
 }
 
 pub fn run_roast(args: RoastArgs) -> Result<()> {
+    let config = roast_config::load_roast_config()?;
     let client = IpcClient::from_env(None);
     let events = data_fetch::fetch_all_events(&client, args.actor.as_deref(), None)?;
 
@@ -79,7 +81,7 @@ pub fn run_roast(args: RoastArgs) -> Result<()> {
         return Ok(());
     }
 
-    let mut data = roast_analysis::analyze_events(&events);
+    let mut data = roast_analysis::analyze_events(&events, &config);
 
     // Try to get Merkle root (best-effort)
     if let Ok(checkpoint) = data_fetch::fetch_checkpoint(&client) {

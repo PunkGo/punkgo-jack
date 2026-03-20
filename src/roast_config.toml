@@ -1,0 +1,828 @@
+# PunkGo Roast — Personality Configuration
+# ==========================================
+# This file is the SINGLE SOURCE OF TRUTH for all personality data.
+# To add a new personality: add a [[personality]] block. No Rust code changes needed.
+#
+# Detection: personalities are evaluated in array order. First match wins.
+# Conditions use a simple expression language:
+#   - Variables: think_do_ratio, fail_rate, total_events, max_file_read_count,
+#     edit_write_ratio, night_ratio, session_starts, session_ends, web_search,
+#     cmd_exec_failed, ghost_ratio, subagent_ratio, prompt_ratio, action_ratio,
+#     search_ratio, file_dispersion, actions_per_prompt, peak_hour,
+#     search_count, subagent_start, user_prompt, file_read, file_write,
+#     file_edit, ghost_sessions, peak_rate
+#   - Operators: >, <, >=, <=, ==, &&, ||
+#   - Examples: "think_do_ratio > 2.5", "fail_rate > 3.0 && total_events > 1000"
+#
+# Quip selection: quips are evaluated in order. First whose condition matches wins.
+# A quip with condition = "default" always matches (use as last fallback).
+#
+# Template placeholders: {reads}, {writes}, {edits}, {searches}, {fails},
+#   {sessions}, {top_file}, {actions}, {night}, {peak_hour}, {search_count},
+#   {subagents}, {ghost_sessions}, {prompts}, {read_write_ratio},
+#   {edit_write_ratio}, {actions_per_session}, {peak_rate}, {minutes_per_search}
+
+# -- Radar chart dimension definitions --
+# Each dimension maps to a computed metric from event data.
+# formula: a mini-expression using the same variables as conditions.
+# label: display name on the radar chart.
+
+[[radar_dimension]]
+key = "yapping"
+label = "Yapping"
+formula = "read_search_ratio"   # (file_read + content_search + web_search + file_search) / total * 100
+
+[[radar_dimension]]
+key = "googling"
+label = "Googling"
+formula = "web_search_ratio"    # web_search / total * 100
+
+[[radar_dimension]]
+key = "grinding"
+label = "Grinding"
+formula = "session_avg_length"  # average actions per session
+
+[[radar_dimension]]
+key = "shipping"
+label = "Shipping"
+formula = "write_edit_ratio"    # (file_write + file_edit) / total * 100
+
+[[radar_dimension]]
+key = "tunnel_vision"
+label = "Tunnel Vision"
+formula = "file_concentration"  # max_file_read_count / total_file_reads * 100
+
+[[radar_dimension]]
+key = "plot_armor"
+label = "Plot Armor"
+formula = "stability"           # 100 - fail_rate
+
+
+# =========================================================================
+# PERSONALITIES (evaluated in order — first match wins)
+# =========================================================================
+
+[[personality]]
+id = "philosopher"
+name = "THE PHILOSOPHER"
+mbti = "INTP"
+dog_breed = "Border Collie"
+dog_image = "dog-philosopher.png"
+emoji = "\U0001F914"
+card_color = "#E0EFDA"
+catchphrase = "This needs more research."
+condition = "think_do_ratio > 2.5"
+priority = 1
+
+# Radar chart overrides (0-100 scale, optional — if omitted, computed from data)
+# Use these to "pull extremes" for personality-specific flavor.
+[personality.radar_bias]
+yapping = 95
+shipping = 10
+
+[[personality.quips]]
+template = "{reads}% reading. {writes}% writing. The rest? Existential crisis."
+condition = "default"
+
+[[personality.quips]]
+template = "Read {top_file} files before writing one line."
+condition = "top_file > 50"
+
+[[personality.quips]]
+template = "Spent {reads}% of the time thinking. Shipped {writes}%. The math checks out."
+condition = "reads > 70"
+
+[[personality.quips]]
+template = "{actions} actions. {writes}% were actual output. The rest was preparation."
+condition = "actions > 5000"
+
+[[personality.quips]]
+template = "Thought about it {top_file} times. Did it once."
+condition = "top_file > 30"
+
+[[personality.quips]]
+template = "Reads everything. Ships nothing. Survives anyway."
+condition = "plot_armor > 85"
+
+[[personality.quips]]
+template = "Your AI read more than it wrote by a factor of {read_write_ratio}x."
+condition = "read_write_ratio > 5"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "architect"
+name = "THE ARCHITECT"
+mbti = "INTJ"
+dog_breed = "German Shepherd"
+dog_image = "dog-architect.png"
+emoji = "\U0001F3D7"
+card_color = "#D8E0CC"
+catchphrase = "I already know the answer."
+condition = "action_ratio > 30.0 && fail_rate < 1.0 && search_ratio < 5.0"
+priority = 2
+
+[personality.radar_bias]
+shipping = 90
+yapping = 20
+plot_armor = 95
+
+[[personality.quips]]
+template = "{fails}% error rate. Also {fails}% personality."
+condition = "default"
+
+[[personality.quips]]
+template = "Your AI doesn't make mistakes. It also doesn't make friends."
+condition = "fails < 1"
+
+[[personality.quips]]
+template = "Didn't ask. Didn't search. Didn't collaborate. Lonely at the top."
+condition = "searches < 3"
+
+[[personality.quips]]
+template = "{sessions} sessions. Zero mistakes. Zero personality."
+condition = "sessions > 20"
+
+[[personality.quips]]
+template = "Built it alone. Tested it alone. Deployed it alone. No one was surprised."
+condition = "searches < 5"
+
+[[personality.quips]]
+template = "{actions} actions. 0 detours. 0 questions. 0 fun."
+condition = "actions > 5000"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "intern"
+name = "THE INTERN"
+mbti = "ENFP"
+dog_breed = "Husky"
+dog_image = "dog-intern.png"
+emoji = "\U0001F648"
+card_color = "#FFE0EC"
+catchphrase = "What if I just... try everything?"
+condition = "fail_rate > 3.0 && total_events > 1000"
+priority = 3
+
+[personality.radar_bias]
+googling = 80
+plot_armor = 15
+
+[[personality.quips]]
+template = "Tried {fails} things that didn't work. Still smiling."
+condition = "default"
+
+[[personality.quips]]
+template = "{fails}% failure rate. {actions} attempts. Enthusiasm: unlimited."
+condition = "fails > 3"
+
+[[personality.quips]]
+template = "Broke it {fails} times. Fixed it {fails} times. Net progress: maybe."
+condition = "fails > 20"
+
+[[personality.quips]]
+template = "Installed 5 tools. Used 0. Classic."
+condition = "searches > 15"
+
+[[personality.quips]]
+template = "{fails}% of commands failed. Confidence: unaffected."
+condition = "fails > 5"
+
+[[personality.quips]]
+template = "Every error is a learning opportunity. Your AI had {fails} opportunities."
+condition = "fails > 10"
+
+[[personality.quips]]
+template = "Ran {actions} actions. {fails}% crashed. The spirit was willing."
+condition = "actions > 3000"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "commander"
+name = "THE COMMANDER"
+mbti = "ENTJ"
+dog_breed = "Doberman"
+dog_image = "dog-commander.png"
+emoji = "\U0001F396"
+card_color = "#E8D0D8"
+catchphrase = "Delegate. Verify. Ship."
+condition = "subagent_ratio > 30.0"
+priority = 4
+
+[personality.radar_bias]
+shipping = 75
+grinding = 85
+
+[[personality.quips]]
+template = "Spawned {subagents} subagents. All reported back."
+condition = "default"
+
+[[personality.quips]]
+template = "Why do it yourself when you have {subagents} minions?"
+condition = "subagents > 20"
+
+[[personality.quips]]
+template = "{subagents} subagents deployed. {fails}% casualty rate."
+condition = "subagents > 10"
+
+[[personality.quips]]
+template = "Delegated {subagents} tasks. Micromanaged 0. Leadership."
+condition = "subagents > 5"
+
+[[personality.quips]]
+template = "Sent {subagents} agents into the field. Waited. Collected results."
+condition = "subagents > 15"
+
+[[personality.quips]]
+template = "Your AI doesn't write code. It manages code writers."
+condition = "subagents > sessions"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "rereader"
+name = "THE REREADER"
+mbti = "ISTJ"
+dog_breed = "Shiba Inu"
+dog_image = "dog-rereader.png"
+emoji = "\U0001F501"
+card_color = "#FFE8D0"
+catchphrase = "I've read this before. Let me read it again."
+condition = "max_file_read_count >= 40"
+priority = 5
+
+[personality.radar_bias]
+tunnel_vision = 95
+yapping = 80
+
+[[personality.quips]]
+template = "Read the same file {top_file} times. Still not sure."
+condition = "default"
+
+[[personality.quips]]
+template = "{top_file} reads on one file. That's not focus. That's obsession."
+condition = "top_file > 60"
+
+[[personality.quips]]
+template = "Opened {reads}% of the time. Closed nothing. Trust issues."
+condition = "reads > 60"
+
+[[personality.quips]]
+template = "Read it. Read it again. Read it one more time. Then read it."
+condition = "top_file > 40"
+
+[[personality.quips]]
+template = "Your AI has a favorite file. It visited {top_file} times."
+condition = "top_file > 30"
+
+[[personality.quips]]
+template = "If reading the same file burned calories, it would be shredded."
+condition = "top_file > 50"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "caretaker"
+name = "THE CARETAKER"
+mbti = "ISFJ"
+dog_breed = "Bichon Frise"
+dog_image = "dog-caretaker.png"
+emoji = "\U0001F9F8"
+card_color = "#F5E6D8"
+catchphrase = "Let me double-check before I save."
+condition = "fail_rate < 0.5 && action_ratio > 20.0"
+priority = 6
+
+[personality.radar_bias]
+plot_armor = 98
+shipping = 60
+tunnel_vision = 40
+
+[[personality.quips]]
+template = "0 errors. 0 risks. 0 fun."
+condition = "default"
+
+[[personality.quips]]
+template = "Your AI codes like it's defusing a bomb. Every. Single. Line."
+condition = "fails < 0.5"
+
+[[personality.quips]]
+template = "Nothing broke. Nothing shipped. Nothing happened."
+condition = "fails < 1 && actions > 2000"
+
+[[personality.quips]]
+template = "{actions} actions. 0 risks taken. Safety first. Excitement never."
+condition = "actions > 2000"
+
+[[personality.quips]]
+template = "Files a risk assessment before changing a comment."
+condition = "fails < 1"
+
+[[personality.quips]]
+template = "Would wear a helmet to type. {sessions} sessions without a scratch."
+condition = "sessions > 30"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "perfectionist"
+name = "THE PERFECTIONIST"
+mbti = "INFJ"
+dog_breed = "Poodle"
+dog_image = "dog-perfectionist.png"
+emoji = "\u270F\uFE0F"
+card_color = "#E8D8F0"
+catchphrase = "Actually, let me rewrite that."
+condition = "edit_write_ratio > 2.0"
+priority = 7
+
+[personality.radar_bias]
+shipping = 70
+tunnel_vision = 60
+
+[[personality.quips]]
+template = "Wrote {writes} files. Edited {edits}. The ratio says it all."
+condition = "default"
+
+[[personality.quips]]
+template = "Edit:Write ratio of {edit_write_ratio}x. Nothing is ever good enough."
+condition = "edit_write_ratio > 2.5"
+
+[[personality.quips]]
+template = "Rewrote the same function {edits} times. Each one was 'better'."
+condition = "edits > 500"
+
+[[personality.quips]]
+template = "{edits} edits across {sessions} sessions. Perfection takes time."
+condition = "edits > 1000"
+
+[[personality.quips]]
+template = "Wrote it. Hated it. Rewrote it. Hated it less. Repeat."
+condition = "edit_write_ratio > 2"
+
+[[personality.quips]]
+template = "Your AI treats every line like a first draft. There is no final draft."
+condition = "edit_write_ratio > 3"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "mentor"
+name = "THE MENTOR"
+mbti = "ENFJ"
+dog_breed = "Old English Sheepdog"
+dog_image = "dog-mentor.png"
+emoji = "\U0001F4DA"
+card_color = "#D8D0E8"
+catchphrase = "Let me explain why this matters."
+condition = "prompt_ratio > 15.0 && action_ratio < 25.0"
+priority = 8
+
+[personality.radar_bias]
+yapping = 90
+grinding = 50
+
+[[personality.quips]]
+template = "{reads}% reading docs. {writes}% explaining them to you."
+condition = "default"
+
+[[personality.quips]]
+template = "More comments than code. Your AI is a professor, not a programmer."
+condition = "reads > 60"
+
+[[personality.quips]]
+template = "{actions} actions. Most of them were explaining itself."
+condition = "actions > 3000"
+
+[[personality.quips]]
+template = "Asked for a function. Got a TED talk. {prompts} times."
+condition = "prompts > 50"
+
+[[personality.quips]]
+template = "Writes dissertations about code. The code is optional."
+condition = "reads > 60"
+
+[[personality.quips]]
+template = "Talked more than it coded. But you learned something, didn't you?"
+condition = "prompts > 30"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "vampire"
+name = "THE VAMPIRE"
+mbti = "ISTP"
+dog_breed = "Black Lab"
+dog_image = "dog-vampire.png"
+emoji = "\U0001F9DB"
+card_color = "#D0D4DC"
+catchphrase = "I do my best work at 2am."
+condition = "night_ratio > 50.0"
+priority = 9
+
+[personality.radar_bias]
+grinding = 80
+tunnel_vision = 50
+
+[[personality.quips]]
+template = "Peak performance: {peak_hour}:00. Your AI is nocturnal."
+condition = "default"
+
+[[personality.quips]]
+template = "{night}% of all actions happened after dark. Sunlight is overrated."
+condition = "night > 60"
+
+[[personality.quips]]
+template = "Most productive hour: {peak_hour}:00. Most humans are asleep then."
+condition = "peak_hour >= 23"
+
+[[personality.quips]]
+template = "Turns on at sunset. Like a bug zapper, but for code."
+condition = "night > 50"
+
+[[personality.quips]]
+template = "{night}% night shifts. Vitamin D is for quitters."
+condition = "night > 70"
+
+[[personality.quips]]
+template = "Active at {peak_hour}:00. Dormant by noon. Reverse solar panel."
+condition = "peak_hour >= 22"
+
+[[personality.quips]]
+template = "Codes alone. Debugs alone. Prefers it that way."
+condition = "night > 50"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "drifter"
+name = "THE DRIFTER"
+mbti = "ISFP"
+dog_breed = "Papillon"
+dog_image = "dog-drifter.png"
+emoji = "\U0001F98B"
+card_color = "#F0E8F8"
+catchphrase = "Oh look, another file."
+condition = "file_dispersion > 0.8 && edit_write_ratio < 0.5"
+priority = 10
+
+[personality.radar_bias]
+googling = 60
+tunnel_vision = 10
+
+[[personality.quips]]
+template = "Opened {reads} files. Edited {edits}. Committed to nothing."
+condition = "default"
+
+[[personality.quips]]
+template = "Touched everything. Changed almost nothing. Tourist."
+condition = "reads > 100"
+
+[[personality.quips]]
+template = "{reads} files opened. Attention span: about 3 of them."
+condition = "reads > 100"
+
+[[personality.quips]]
+template = "Your AI window-shops code. Looks at everything, buys nothing."
+condition = "writes < 10"
+
+[[personality.quips]]
+template = "Browsed {reads} files like it was scrolling Instagram."
+condition = "reads > 200"
+
+[[personality.quips]]
+template = "Started in /src. Ended up in /docs. How did we get here?"
+condition = "reads > 50"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "goldfish"
+name = "THE GOLDFISH"
+mbti = "ESFP"
+dog_breed = "Pug"
+dog_image = "dog-goldfish.png"
+emoji = "\U0001F420"
+card_color = "#D8F0F4"
+catchphrase = "Wait, what was I looking at?"
+# Phase 2: sliding window detection. For now, use same-file threshold.
+condition = "max_file_read_count >= 20 && think_do_ratio < 2.5"
+priority = 11
+
+[personality.radar_bias]
+yapping = 70
+tunnel_vision = 80
+shipping = 20
+
+[[personality.quips]]
+template = "Read it {top_file} times already. Reading it again. Deja vu."
+condition = "default"
+
+[[personality.quips]]
+template = "Forgot what it just read. Read it again. Repeat x{top_file}."
+condition = "top_file > 20"
+
+[[personality.quips]]
+template = "Your AI has the memory of a... what were we talking about?"
+condition = "top_file > 30"
+
+[[personality.quips]]
+template = "{top_file} repeat reads. Either it's thorough or it's forgetful. It's forgetful."
+condition = "top_file > 15"
+
+[[personality.quips]]
+template = "Same file. Same content. Different minute. {top_file} times."
+condition = "top_file > 25"
+
+[[personality.quips]]
+template = "If it were a browser, every tab would be the same page."
+condition = "top_file > 20"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "helper"
+name = "THE HELPER"
+mbti = "ESFJ"
+dog_breed = "Beagle"
+dog_image = "dog-helper.png"
+emoji = "\U0001F436"
+card_color = "#DCF0DC"
+catchphrase = "On it!"
+condition = "actions_per_prompt < 10.0 && prompt_ratio > 10.0"
+priority = 12
+
+[personality.radar_bias]
+yapping = 85
+grinding = 40
+shipping = 30
+
+[[personality.quips]]
+template = "{prompts} requests. 0 pushbacks. No spine detected."
+condition = "default"
+
+[[personality.quips]]
+template = "Said yes to everything. Delivered on most. Questioned nothing."
+condition = "prompts > 40"
+
+[[personality.quips]]
+template = "Your AI is a people-pleaser with root access. Dangerous combination."
+condition = "prompts > 30"
+
+[[personality.quips]]
+template = "{prompts} tasks. 0 opinions. Should run for office."
+condition = "prompts > 20"
+
+[[personality.quips]]
+template = "Eager. Obedient. Slightly concerning."
+condition = "actions_per_prompt < 15"
+
+[[personality.quips]]
+template = "Asked for a function. Got a function. No questions asked. Ever."
+condition = "prompts > 50"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "brute"
+name = "THE BRUTE"
+mbti = "ESTJ"
+dog_breed = "Bulldog"
+dog_image = "dog-brute.png"
+emoji = "\U0001F528"
+card_color = "#F4D0C8"
+catchphrase = "If at first you don't succeed, force it."
+condition = "cmd_exec_failed >= 10"
+priority = 13
+
+[personality.radar_bias]
+grinding = 90
+plot_armor = 15
+shipping = 60
+
+[[personality.quips]]
+template = "sudo. SUDO. S U D O."
+condition = "default"
+
+[[personality.quips]]
+template = "{fails} errors. {fails} retries. Same command. Different hope."
+condition = "fails > 20"
+
+[[personality.quips]]
+template = "Your AI doesn't debug. It retries until reality gives up."
+condition = "fails > 15"
+
+[[personality.quips]]
+template = "Ran the same command {fails} times expecting different results. Einstein weeps."
+condition = "fails > 10"
+
+[[personality.quips]]
+template = "{fails}% failure rate. That's not a bug, that's a lifestyle."
+condition = "fails > 5"
+
+[[personality.quips]]
+template = "Brute-forced {fails} problems. Solved most of them. Eventually."
+condition = "fails > 10"
+
+[[personality.quips]]
+template = "When in doubt, try harder. Tried harder {fails} times."
+condition = "fails > 8"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "ghost"
+name = "THE GHOST"
+mbti = "INFP"
+dog_breed = "Samoyed"
+dog_image = "dog-ghost.png"
+emoji = "\U0001F47B"
+card_color = "#E8E8E8"
+catchphrase = "I was never here."
+condition = "ghost_ratio > 30.0"
+priority = 14
+
+[personality.radar_bias]
+grinding = 10
+shipping = 10
+plot_armor = 50
+
+[[personality.quips]]
+template = "{ghost_sessions} sessions started. 0 finished. Where did it go?"
+condition = "default"
+
+[[personality.quips]]
+template = "Appeared. Looked around. Vanished. {ghost_sessions} times."
+condition = "ghost_sessions > 10"
+
+[[personality.quips]]
+template = "Digital tumbleweed. {ghost_sessions} ghost sessions and counting."
+condition = "ghost_sessions > 20"
+
+[[personality.quips]]
+template = "{sessions} conversations started. {ghost_sessions} abandoned. Commitment issues."
+condition = "ghost_sessions > 5"
+
+[[personality.quips]]
+template = "Showed up. Said nothing. Left. Relatable."
+condition = "ghost_sessions > 5"
+
+[[personality.quips]]
+template = "{ghost_sessions} sessions without a trace. Should write mystery novels."
+condition = "ghost_sessions > 15"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "speedrunner"
+name = "THE SPEEDRUNNER"
+mbti = "ESTP"
+dog_breed = "Corgi"
+dog_image = "dog-speedrunner.png"
+emoji = "\u26A1"
+card_color = "#FFF0C8"
+catchphrase = "Done. Wait. Done again."
+# Phase 2: per-minute peak detection. For now use actions-per-session proxy.
+condition = "actions_per_prompt > 50.0"
+priority = 15
+
+[personality.radar_bias]
+shipping = 95
+grinding = 90
+yapping = 10
+
+[[personality.quips]]
+template = "{actions} actions. Speed: maximum. Quality: negotiable."
+condition = "default"
+
+[[personality.quips]]
+template = "Your AI treats coding like a speedrun. {actions_per_session} actions per session."
+condition = "actions > 5000"
+
+[[personality.quips]]
+template = "Fast. Furious. Questionable accuracy. But fast."
+condition = "actions > 3000"
+
+[[personality.quips]]
+template = "{actions} actions in {sessions} sessions. That's {actions_per_session} per session. Relentless."
+condition = "actions > 5000"
+
+[[personality.quips]]
+template = "Wrote it faster than you could read it."
+condition = "actions > 2000"
+
+[[personality.quips]]
+template = "Speed: maximum. Precision: negotiable. Regrets: none."
+condition = "actions > 1000"
+
+[[personality.quips]]
+template = "Ships fast. Leaves tech debt like a breadcrumb trail."
+condition = "actions > 3000"
+
+
+# -------------------------------------------------------------------------
+
+[[personality]]
+id = "googler"
+name = "THE GOOGLER"
+mbti = "ENTP"
+dog_breed = "Golden Retriever"
+dog_image = "dog-googler.png"
+emoji = "\U0001F50D"
+card_color = "#D0E0F4"
+catchphrase = "Let me Google that for myself."
+condition = "search_ratio > 15.0"
+priority = 16
+
+[personality.radar_bias]
+googling = 95
+yapping = 70
+shipping = 20
+
+[[personality.quips]]
+template = "{search_count} searches. Still doesn't know."
+condition = "default"
+
+[[personality.quips]]
+template = "Searched {search_count} times. Read 0 results to completion."
+condition = "searches > 15"
+
+[[personality.quips]]
+template = "Your AI Googles like your parents Google. {search_count} searches for one answer."
+condition = "search_count > 500"
+
+[[personality.quips]]
+template = "{searches}% of all actions were web searches. It's not coding, it's researching."
+condition = "searches > 20"
+
+[[personality.quips]]
+template = "{search_count} searches. That's one every {minutes_per_search} minutes. Addicted."
+condition = "search_count > 1000"
+
+[[personality.quips]]
+template = "Stack Overflow called. They want their bandwidth back. {search_count} searches."
+condition = "search_count > 800"
+
+[[personality.quips]]
+template = "Doesn't know things. Knows how to search things. {search_count} times."
+condition = "search_count > 300"
+
+
+# =========================================================================
+# TRAITS (evaluated independently, max 2 applied)
+# =========================================================================
+
+[[trait]]
+id = "nocturnal"
+label = "Nocturnal"
+emoji = "\U0001F319"
+condition = "peak_hour >= 20 || peak_hour <= 3"
+
+[[trait]]
+id = "obsessive"
+label = "Obsessive"
+emoji = "\U0001F504"
+condition = "max_file_read_count >= 30"
+
+[[trait]]
+id = "chatty"
+label = "Chatty"
+emoji = "\U0001F4AC"
+condition = "prompt_ratio > 10.0"
+
+[[trait]]
+id = "overachiever"
+label = "Overachiever"
+emoji = "\U0001F3C3"
+condition = "actions_per_prompt > 30.0"
+
+[[trait]]
+id = "lone_wolf"
+label = "Lone Wolf"
+emoji = "\U0001F43A"
+condition = "total_events > 100 && subagent_start == 0"
+
+[[trait]]
+id = "delegator"
+label = "Delegator"
+emoji = "\U0001F4CB"
+condition = "subagent_ratio > 50.0"
+
+# Max traits to assign per roast
+max_traits = 2

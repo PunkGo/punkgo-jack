@@ -1,70 +1,6 @@
 #![allow(dead_code)]
 
-use crate::roast_analysis::{Personality, RoastData, Trait};
-
-// ---------------------------------------------------------------------------
-// Display helpers
-// ---------------------------------------------------------------------------
-
-impl Personality {
-    pub fn emoji(&self) -> &str {
-        match self {
-            Personality::Philosopher => "🤔",
-            Personality::Intern => "🙈",
-            Personality::Rereader => "🔁",
-            Personality::Perfectionist => "✏️",
-            Personality::Vampire => "🧛",
-            Personality::Goldfish => "🐟",
-            Personality::Brute => "🔨",
-            Personality::Ghost => "👻",
-            Personality::Speedrunner => "⚡",
-            Personality::Googler => "🔍",
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            Personality::Philosopher => "THE PHILOSOPHER",
-            Personality::Intern => "THE INTERN",
-            Personality::Rereader => "THE REREADER",
-            Personality::Perfectionist => "THE PERFECTIONIST",
-            Personality::Vampire => "THE VAMPIRE",
-            Personality::Goldfish => "THE GOLDFISH",
-            Personality::Brute => "THE BRUTE",
-            Personality::Ghost => "THE GHOST",
-            Personality::Speedrunner => "THE SPEEDRUNNER",
-            Personality::Googler => "THE GOOGLER",
-        }
-    }
-
-    pub fn catchphrase(&self) -> &str {
-        match self {
-            Personality::Philosopher => "Let me read that one more time.",
-            Personality::Intern => "What if I just... try everything?",
-            Personality::Rereader => "I've read this before. Let me read it again.",
-            Personality::Perfectionist => "Actually, let me rewrite that.",
-            Personality::Vampire => "I do my best work at 2am.",
-            Personality::Goldfish => "Wait, what was I looking at?",
-            Personality::Brute => "sudo. SUDO. S U D O.",
-            Personality::Ghost => "I was never here.",
-            Personality::Speedrunner => "Done. Wait. Done again.",
-            Personality::Googler => "Let me Google that for myself.",
-        }
-    }
-}
-
-impl Trait {
-    pub fn label(&self) -> &str {
-        match self {
-            Trait::Nocturnal => "Nocturnal 🌙",
-            Trait::Obsessive => "Obsessive 🔄",
-            Trait::Chatty => "Chatty 💬",
-            Trait::LoneWolf => "Lone Wolf 🐺",
-            Trait::Delegator => "Delegator 📋",
-            Trait::Overachiever => "Overachiever 🏃",
-        }
-    }
-}
+use crate::roast_analysis::RoastData;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,17 +49,16 @@ pub fn render_cli(data: &RoastData) -> String {
     out.push('\n');
     out.push_str(&format!(
         "       {} {}\n",
-        data.personality.emoji(),
-        data.personality.name()
+        data.personality.emoji, data.personality.name
     ));
 
     // Traits
-    let trait_labels: Vec<&str> = data.traits.iter().map(|t| t.label()).collect();
+    let trait_labels: Vec<String> = data.traits.iter().map(|t| t.display_label()).collect();
     if !trait_labels.is_empty() {
         out.push_str(&format!("       {}\n", trait_labels.join(" · ")));
     }
     out.push('\n');
-    out.push_str(&format!("       \"{}\"\n", data.personality.catchphrase()));
+    out.push_str(&format!("       \"{}\"\n", data.quip));
     out.push('\n');
 
     // RPG Stats
@@ -206,7 +141,7 @@ pub fn render_cli(data: &RoastData) -> String {
     }
 
     // CTA — strip "THE " prefix for natural English
-    let name_lower = data.personality.name().to_lowercase();
+    let name_lower = data.personality.name.to_lowercase();
     let name_short = name_lower.strip_prefix("the ").unwrap_or(&name_lower);
     out.push_str(&format!("    Your AI is a {}.\n", name_short));
     out.push_str("    What's yours?\n");
@@ -221,8 +156,6 @@ pub fn render_json(data: &RoastData) -> String {
 }
 
 /// Tiny helper: build a single SVG element string.
-/// `tag` is the element name, `attrs` is pre-formatted attribute string,
-/// `content` is inner text (empty string for self-closing).
 fn svg_el(tag: &str, attrs: &str, content: &str) -> String {
     if content.is_empty() {
         format!("<{tag} {attrs}/>", tag = tag, attrs = attrs)
@@ -254,7 +187,6 @@ pub fn render_svg(data: &RoastData) -> String {
         let bar_w = ((*val as f32 / 100.0) * 180.0) as u32;
         let delay_ms = i * 150;
 
-        // label
         rpg_rows.push_str(&svg_el(
             "text",
             &format!(
@@ -268,7 +200,6 @@ pub fn render_svg(data: &RoastData) -> String {
         ));
         rpg_rows.push('\n');
 
-        // background track
         rpg_rows.push_str(&svg_el(
             "rect",
             &format!(
@@ -279,7 +210,6 @@ pub fn render_svg(data: &RoastData) -> String {
         ));
         rpg_rows.push('\n');
 
-        // filled bar
         rpg_rows.push_str(&svg_el(
             "rect",
             &format!(
@@ -295,7 +225,6 @@ pub fn render_svg(data: &RoastData) -> String {
         ));
         rpg_rows.push('\n');
 
-        // value
         rpg_rows.push_str(&svg_el(
             "text",
             &format!(
@@ -360,21 +289,20 @@ pub fn render_svg(data: &RoastData) -> String {
     let trait_str: String = data
         .traits
         .iter()
-        .map(|t| t.label())
+        .map(|t| t.display_label())
         .collect::<Vec<_>>()
         .join(" . ");
 
-    let name_lower = data.personality.name().to_lowercase();
-    let personality_name = data.personality.name();
-    let emoji = data.personality.emoji();
-    let catchphrase = data.personality.catchphrase();
+    let name_lower = data.personality.name.to_lowercase();
+    let personality_name = &data.personality.name;
+    let emoji = &data.personality.emoji;
+    let catchphrase = &data.quip;
     let period_days = data.period_days;
     let total_events_str = comma(data.total_events);
     let fail_rate = data.fail_rate;
     let total_label = comma(data.total_events);
 
     // ---- assemble SVG ----
-    // CSS uses braces heavily, so we build it as a plain &str (no format! interpolation).
     let css_block = "<style>\n    \
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }\n    \
         @keyframes fillBar { from { width: 0; } }\n    \
@@ -384,19 +312,16 @@ pub fn render_svg(data: &RoastData) -> String {
 
     let mut out = String::with_capacity(4096);
 
-    // SVG root + defs
     out.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"440\" height=\"680\" viewBox=\"0 0 440 680\">\n");
     out.push_str("<defs>\n  ");
     out.push_str(css_block);
     out.push_str("\n</defs>\n");
 
-    // Background rect
     out.push_str(
         "<rect width=\"440\" height=\"680\" rx=\"12\" ry=\"12\" \
         fill=\"#0d1117\" stroke=\"#30363d\" stroke-width=\"1.5\"/>\n",
     );
 
-    // Header
     out.push_str(
         "<text x=\"220\" y=\"36\" \
         style=\"fill:#58a6ff;font-size:13px;font-family:monospace;\
@@ -406,7 +331,6 @@ pub fn render_svg(data: &RoastData) -> String {
         "<line x1=\"20\" y1=\"48\" x2=\"420\" y2=\"48\" stroke=\"#30363d\" stroke-width=\"1\"/>\n",
     );
 
-    // Period info
     out.push_str(&format!(
         "<text x=\"220\" y=\"68\" \
          style=\"fill:#8b949e;font-size:11px;font-family:monospace;text-anchor:middle\">\
@@ -415,14 +339,12 @@ pub fn render_svg(data: &RoastData) -> String {
         total = total_events_str,
     ));
 
-    // Personality header
     out.push_str(
         "<text x=\"220\" y=\"100\" \
         style=\"fill:#8b949e;font-size:11px;font-family:monospace;\
         text-anchor:middle;letter-spacing:1px\">YOUR AI IS</text>\n",
     );
 
-    // Personality name + emoji
     out.push_str(&format!(
         "<text x=\"220\" y=\"136\" \
          style=\"fill:#e6edf3;font-size:22px;font-family:monospace;\
@@ -431,14 +353,12 @@ pub fn render_svg(data: &RoastData) -> String {
         name = personality_name,
     ));
 
-    // Traits
     out.push_str(&format!(
         "<text x=\"220\" y=\"158\" \
          style=\"fill:#8b949e;font-size:11px;font-family:monospace;text-anchor:middle\">{traits}</text>\n",
         traits = trait_str,
     ));
 
-    // Catchphrase
     out.push_str(&format!(
         "<text x=\"220\" y=\"182\" \
          style=\"fill:#7ee787;font-size:11px;font-family:monospace;\
@@ -448,7 +368,6 @@ pub fn render_svg(data: &RoastData) -> String {
 
     out.push_str("<line x1=\"20\" y1=\"198\" x2=\"420\" y2=\"198\" stroke=\"#30363d\" stroke-width=\"1\"/>\n");
 
-    // Stats header
     out.push_str(
         "<text x=\"220\" y=\"222\" \
         style=\"fill:#58a6ff;font-size:11px;font-family:monospace;\
@@ -464,19 +383,16 @@ pub fn render_svg(data: &RoastData) -> String {
     );
     out.push_str("<line x1=\"20\" y1=\"254\" x2=\"420\" y2=\"254\" stroke=\"#21262d\" stroke-width=\"1\"/>\n");
 
-    // RPG bars
     out.push_str(&rpg_rows);
 
     out.push_str("<line x1=\"20\" y1=\"518\" x2=\"420\" y2=\"518\" stroke=\"#30363d\" stroke-width=\"1\"/>\n");
 
-    // Evidence header
     out.push_str(
         "<text x=\"220\" y=\"516\" \
         style=\"fill:#58a6ff;font-size:11px;font-family:monospace;\
         text-anchor:middle;letter-spacing:2px\">THE EVIDENCE</text>\n",
     );
 
-    // Evidence rows
     out.push_str(&ev_rows);
 
     out.push_str("<line x1=\"20\" y1=\"612\" x2=\"420\" y2=\"612\" stroke=\"#30363d\" stroke-width=\"1\"/>\n");
@@ -498,10 +414,8 @@ pub fn render_svg(data: &RoastData) -> String {
         rate = fail_rate,
     ));
 
-    // Merkle (optional)
     out.push_str(&merkle_row);
 
-    // CTA
     out.push_str("<line x1=\"20\" y1=\"654\" x2=\"420\" y2=\"654\" stroke=\"#30363d\" stroke-width=\"1\"/>\n");
     out.push_str(&format!(
         "<text x=\"220\" y=\"668\" \
@@ -533,8 +447,37 @@ mod tests {
         RoastData {
             total_events: 1000,
             period_days: 7,
-            personality: Personality::Philosopher,
-            traits: vec![Trait::Nocturnal, Trait::Obsessive],
+            personality: MatchedPersonality {
+                id: "philosopher".into(),
+                name: "THE PHILOSOPHER".into(),
+                mbti: "INTP".into(),
+                emoji: "\u{1F914}".into(),
+                catchphrase: "This needs more research.".into(),
+                card_color: "#E0EFDA".into(),
+                dog_breed: "Border Collie".into(),
+                dog_image: "dog-philosopher.png".into(),
+            },
+            traits: vec![
+                MatchedTrait {
+                    id: "nocturnal".into(),
+                    label: "Nocturnal".into(),
+                    emoji: "\u{1F319}".into(),
+                },
+                MatchedTrait {
+                    id: "obsessive".into(),
+                    label: "Obsessive".into(),
+                    emoji: "\u{1F504}".into(),
+                },
+            ],
+            quip: "60% reading. 10% writing. The rest? Existential crisis.".into(),
+            radar: vec![
+                ("Yapping".into(), 95.0),
+                ("Googling".into(), 5.0),
+                ("Grinding".into(), 40.0),
+                ("Shipping".into(), 10.0),
+                ("Tunnel Vision".into(), 50.0),
+                ("Plot Armor".into(), 98.5),
+            ],
             rpg: RpgStats {
                 str_val: 12,
                 int_val: 82,
@@ -567,7 +510,7 @@ mod tests {
     fn cli_render_contains_personality() {
         let out = render_cli(&sample_data());
         assert!(out.contains("THE PHILOSOPHER"));
-        assert!(out.contains("Let me read that one more time"));
+        assert!(out.contains("Existential crisis"));
     }
 
     #[test]
@@ -580,16 +523,17 @@ mod tests {
     #[test]
     fn cli_render_uses_actual_personality_in_cta() {
         let mut data = sample_data();
-        data.personality = Personality::Brute;
+        data.personality.id = "brute".into();
+        data.personality.name = "THE BRUTE".into();
         let out = render_cli(&data);
-        assert!(out.contains("a brute")); // "the" prefix stripped for natural CTA
+        assert!(out.contains("a brute"));
     }
 
     #[test]
     fn json_render_is_valid() {
         let json = render_json(&sample_data());
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["personality"], "Philosopher");
+        assert_eq!(parsed["personality"]["id"], "philosopher");
     }
 
     #[test]

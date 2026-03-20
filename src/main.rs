@@ -16,6 +16,7 @@ mod presence;
 mod report;
 mod roast;
 mod roast_analysis;
+mod roast_config;
 mod roast_render;
 mod session;
 mod setup;
