@@ -16,7 +16,7 @@ Design principles:
 
 ## Requirements
 
-- **Rust 1.83+** (MSRV declared in `Cargo.toml`)
+- **Rust 1.85+** (MSRV declared in `Cargo.toml`)
 - `punkgo-kerneld` running for integration testing (unit tests use `EmbeddedBackend` / `MockBackend` under `#[cfg(test)]`)
 
 ## Local Development
