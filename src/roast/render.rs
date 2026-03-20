@@ -17,7 +17,7 @@ pub fn comma(n: usize) -> String {
     let len = bytes.len();
     let mut result = String::with_capacity(len + len / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(b as char);
