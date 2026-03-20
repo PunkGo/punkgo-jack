@@ -355,8 +355,186 @@ pub fn render_svg(data: &RoastData) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Static SVG (no animations, for PNG rendering)
+// Static SVG for PNG rendering (fully inline styles, no CSS classes)
 // ---------------------------------------------------------------------------
+
+/// System font stack that works across Windows, macOS, and Linux for resvg.
+const PNG_FONT_TITLE: &str = "Segoe UI, Arial, Helvetica, sans-serif";
+const PNG_FONT_BODY: &str = "Segoe UI, Arial, Helvetica, sans-serif";
+
+/// Render a fully-inlined personality card SVG for PNG export.
+/// No `<style>` block, no CSS classes, no animations — every style is an
+/// inline attribute so resvg can render it without font-fetching or CSS parsing.
+pub fn render_personality_svg_for_png(data: &RoastData) -> String {
+    let accent = roast_assets::accent_color(&data.personality.id);
+    let bg = &data.personality.card_color;
+    let name = roast_assets::short_name(&data.personality.name);
+    let mbti = &data.personality.mbti;
+    let quip_safe = xml_escape(&data.quip);
+    let catch_safe = xml_escape(&data.personality.catchphrase);
+
+    let dog_b64 = roast_assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
+
+    // Radar polygon
+    let radar_values: Vec<f64> = data
+        .radar
+        .iter()
+        .map(|(_, v)| *v)
+        .chain(std::iter::repeat(50.0))
+        .take(6)
+        .collect();
+
+    let points: Vec<(f64, f64)> = radar_values
+        .iter()
+        .zip(RADAR_ANGLES.iter())
+        .map(|(&v, &a)| polar(v, a))
+        .collect();
+
+    let poly_str: String = points
+        .iter()
+        .map(|(x, y)| format!("{:.0},{:.0}", x, y))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Grid circles
+    let mut grid = String::new();
+    for gr in [75, 60, 45, 30] {
+        grid.push_str(&format!(
+            "      <circle cx=\"{cx}\" cy=\"{cy}\" r=\"{gr}\" fill=\"none\" stroke=\"#00000010\" stroke-width=\"0.5\"/>\n",
+            cx = RADAR_CX as i32,
+            cy = RADAR_CY as i32,
+            gr = gr,
+        ));
+    }
+
+    // Radar labels (inline font)
+    let label_pos = radar_label_positions();
+    let mut lbls = String::new();
+    for (i, (lx, ly, anchor)) in label_pos.iter().enumerate() {
+        lbls.push_str(&format!(
+            "    <text x=\"{lx:.0}\" y=\"{ly:.0}\" text-anchor=\"{anchor}\" \
+             fill=\"#7A7A7A\" font-family=\"{font}\" font-size=\"10\" \
+             font-weight=\"600\">{label}</text>\n",
+            lx = lx,
+            ly = ly,
+            anchor = anchor,
+            font = PNG_FONT_BODY,
+            label = RADAR_LABELS[i],
+        ));
+    }
+
+    // Radar dots (inline fill)
+    let mut dots = String::new();
+    for (px, py) in &points {
+        dots.push_str(&format!(
+            "      <circle cx=\"{px:.0}\" cy=\"{py:.0}\" r=\"3\" fill=\"{accent}\"/>\n",
+            px = px,
+            py = py,
+            accent = accent,
+        ));
+    }
+
+    let stats_line = format!(
+        "{total} events -- past {period} days",
+        period = data.period_days,
+        total = comma(data.total_events),
+    );
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="520" viewBox="0 0 400 520">
+  <rect width="400" height="520" rx="20" fill="{bg}"/>
+  <text x="200" y="18" text-anchor="middle" fill="#9A9A92" font-family="{fb}" font-size="11" font-weight="600" letter-spacing="3">PUNKGO ROAST</text>
+  <text x="200" y="46" text-anchor="middle" fill="#1A1A1A" font-family="{ft}" font-size="30" font-weight="800">{name}</text>
+  <text x="200" y="64" text-anchor="middle" fill="{accent}" font-family="{fb}" font-size="13" font-weight="600" letter-spacing="4">{mbti}</text>
+  <image x="135" y="70" width="130" height="130" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,{dog_b64}"/>
+
+  <g transform="translate(0, 132)">
+    <g>
+{grid}    </g>
+{lbls}
+    <polygon points="{poly_str}" fill="{accent}" fill-opacity="0.2" stroke="none"/>
+    <polygon points="{poly_str}" fill="none" stroke="{accent}" stroke-width="2" stroke-linejoin="round"/>
+    <g>
+{dots}    </g>
+  </g>
+
+  <text x="200" y="412" text-anchor="middle" fill="#1A1A1A" font-family="{fb}" font-size="16" font-weight="700">{quip}</text>
+  <text x="200" y="434" text-anchor="middle" fill="{accent}" font-family="{fb}" font-size="12" font-style="italic">&quot;{catch}&quot;</text>
+  <text x="200" y="462" text-anchor="middle" fill="#A8A8A0" font-family="{fb}" font-size="9">{stats}</text>
+  <text x="200" y="500" text-anchor="middle" fill="{accent}" font-family="{fb}" font-size="10" font-weight="600">What kind of dog is your AI? punkgo.ai/roast</text>
+</svg>"##,
+        accent = accent,
+        bg = bg,
+        ft = PNG_FONT_TITLE,
+        fb = PNG_FONT_BODY,
+        name = name,
+        mbti = mbti,
+        dog_b64 = dog_b64,
+        grid = grid,
+        lbls = lbls,
+        poly_str = poly_str,
+        dots = dots,
+        quip = quip_safe,
+        catch = catch_safe,
+        stats = stats_line,
+    )
+}
+
+/// Render a fully-inlined vibe card SVG for PNG export.
+pub fn render_vibe_svg_for_png(data: &RoastData) -> String {
+    let accent = roast_assets::accent_color(&data.personality.id);
+    let bg = &data.personality.card_color;
+    let name = roast_assets::short_name(&data.personality.name);
+    let mbti = &data.personality.mbti;
+    let quip_safe = xml_escape(&data.quip);
+    let catch_safe = xml_escape(&data.personality.catchphrase);
+
+    let dog_b64 = roast_assets::dog_image_base64(&data.personality.dog_image).unwrap_or_default();
+
+    let footer = format!(
+        "{total} events - punkgo.ai/roast",
+        total = comma(data.total_events),
+    );
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="400" height="320" viewBox="0 0 400 320">
+  <rect width="400" height="320" rx="20" fill="{bg}"/>
+
+  <text x="200" y="28" text-anchor="middle" fill="#9A9A92"
+        font-family="{fb}" font-size="11" font-weight="600" letter-spacing="3">TODAY&#39;S VIBE</text>
+
+  <text x="200" y="56" text-anchor="middle" fill="#1A1A1A"
+        font-family="{ft}" font-size="28" font-weight="800">{name}</text>
+
+  <text x="200" y="72" text-anchor="middle" fill="{accent}"
+        font-family="{fb}" font-size="12" font-weight="600" letter-spacing="4">{mbti}</text>
+
+  <image x="145" y="80" width="110" height="110" preserveAspectRatio="xMidYMid meet"
+         href="data:image/png;base64,{dog_b64}"/>
+
+  <text x="200" y="216" text-anchor="middle" fill="#1A1A1A"
+        font-family="{fb}" font-size="14" font-weight="700">{quip}</text>
+
+  <text x="200" y="240" text-anchor="middle" fill="{accent}"
+        font-family="{fb}" font-size="11" font-style="italic">&quot;{catch}&quot;</text>
+
+  <text x="200" y="296" text-anchor="middle" fill="#B0B0A8"
+        font-family="{fb}" font-size="10">{footer}</text>
+</svg>"##,
+        bg = bg,
+        accent = accent,
+        ft = PNG_FONT_TITLE,
+        fb = PNG_FONT_BODY,
+        name = name,
+        mbti = mbti,
+        dog_b64 = dog_b64,
+        quip = quip_safe,
+        catch = catch_safe,
+        footer = footer,
+    )
+}
+
+// Keep legacy static functions for backward compatibility (used in tests)
 
 /// Strip CSS animations and set all animated elements to their final visible state.
 /// This produces a static SVG suitable for rasterization with resvg.
@@ -419,12 +597,14 @@ pub fn render_vibe_svg_static(data: &RoastData) -> String {
 #[cfg(feature = "roast-png")]
 pub fn render_png(data: &RoastData, today: bool, scale: u32) -> anyhow::Result<Vec<u8>> {
     let svg_str = if today {
-        render_vibe_svg_static(data)
+        render_vibe_svg_for_png(data)
     } else {
-        render_personality_svg_static(data)
+        render_personality_svg_for_png(data)
     };
 
-    let opts = usvg::Options::default();
+    let mut opts = usvg::Options::default();
+    // Load system fonts so resvg can find Arial/Segoe UI
+    opts.fontdb_mut().load_system_fonts();
     let tree = usvg::Tree::from_str(&svg_str, &opts)?;
 
     let size = tree.size();
