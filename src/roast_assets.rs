@@ -5,24 +5,24 @@ use base64::Engine;
 /// Return the base64-encoded PNG for a given dog image filename.
 pub fn dog_image_base64(dog_filename: &str) -> Option<String> {
     let bytes: &[u8] = match dog_filename {
-        "dog-philosopher.png" => include_bytes!("../design/images/dog-philosopher.png").as_slice(),
-        "dog-architect.png" => include_bytes!("../design/images/dog-architect.png").as_slice(),
-        "dog-intern.png" => include_bytes!("../design/images/dog-intern.png").as_slice(),
-        "dog-commander.png" => include_bytes!("../design/images/dog-commander.png").as_slice(),
-        "dog-rereader.png" => include_bytes!("../design/images/dog-rereader.png").as_slice(),
-        "dog-caretaker.png" => include_bytes!("../design/images/dog-caretaker.png").as_slice(),
+        "dog-philosopher.png" => include_bytes!("../assets/dogs/dog-philosopher.png").as_slice(),
+        "dog-architect.png" => include_bytes!("../assets/dogs/dog-architect.png").as_slice(),
+        "dog-intern.png" => include_bytes!("../assets/dogs/dog-intern.png").as_slice(),
+        "dog-commander.png" => include_bytes!("../assets/dogs/dog-commander.png").as_slice(),
+        "dog-rereader.png" => include_bytes!("../assets/dogs/dog-rereader.png").as_slice(),
+        "dog-caretaker.png" => include_bytes!("../assets/dogs/dog-caretaker.png").as_slice(),
         "dog-perfectionist.png" => {
-            include_bytes!("../design/images/dog-perfectionist.png").as_slice()
+            include_bytes!("../assets/dogs/dog-perfectionist.png").as_slice()
         }
-        "dog-mentor.png" => include_bytes!("../design/images/dog-mentor.png").as_slice(),
-        "dog-vampire.png" => include_bytes!("../design/images/dog-vampire.png").as_slice(),
-        "dog-drifter.png" => include_bytes!("../design/images/dog-drifter.png").as_slice(),
-        "dog-goldfish.png" => include_bytes!("../design/images/dog-goldfish.png").as_slice(),
-        "dog-helper.png" => include_bytes!("../design/images/dog-helper.png").as_slice(),
-        "dog-brute.png" => include_bytes!("../design/images/dog-brute.png").as_slice(),
-        "dog-ghost.png" => include_bytes!("../design/images/dog-ghost.png").as_slice(),
-        "dog-speedrunner.png" => include_bytes!("../design/images/dog-speedrunner.png").as_slice(),
-        "dog-googler.png" => include_bytes!("../design/images/dog-googler.png").as_slice(),
+        "dog-mentor.png" => include_bytes!("../assets/dogs/dog-mentor.png").as_slice(),
+        "dog-vampire.png" => include_bytes!("../assets/dogs/dog-vampire.png").as_slice(),
+        "dog-drifter.png" => include_bytes!("../assets/dogs/dog-drifter.png").as_slice(),
+        "dog-goldfish.png" => include_bytes!("../assets/dogs/dog-goldfish.png").as_slice(),
+        "dog-helper.png" => include_bytes!("../assets/dogs/dog-helper.png").as_slice(),
+        "dog-brute.png" => include_bytes!("../assets/dogs/dog-brute.png").as_slice(),
+        "dog-ghost.png" => include_bytes!("../assets/dogs/dog-ghost.png").as_slice(),
+        "dog-speedrunner.png" => include_bytes!("../assets/dogs/dog-speedrunner.png").as_slice(),
+        "dog-googler.png" => include_bytes!("../assets/dogs/dog-googler.png").as_slice(),
         _ => return None,
     };
     Some(base64::engine::general_purpose::STANDARD.encode(bytes))
