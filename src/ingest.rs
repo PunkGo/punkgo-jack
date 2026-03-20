@@ -451,24 +451,6 @@ fn print_session_summary(event: &IngestEvent, client: &IpcClient) {
     eprintln!("Merkle:   tree_size={tree_size}, root={root_hash}");
     eprintln!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}");
     eprintln!();
-
-    // Roast tip: write directly to terminal to bypass Claude Code's stderr capture.
-    print_to_terminal("  Try: punkgo-jack roast --today");
-    print_to_terminal("");
-}
-
-/// Write a message directly to the terminal, bypassing stdout/stderr capture.
-/// Uses /dev/tty on Unix and CONOUT$ on Windows. Silently fails if unavailable.
-fn print_to_terminal(msg: &str) {
-    #[cfg(unix)]
-    let tty_path = "/dev/tty";
-    #[cfg(windows)]
-    let tty_path = "CONOUT$";
-
-    if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open(tty_path) {
-        use std::io::Write;
-        let _ = writeln!(tty, "{}", msg);
-    }
 }
 
 /// Submit an event to the kernel with retry logic for transient errors.
