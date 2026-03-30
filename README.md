@@ -4,50 +4,20 @@
 [![crates.io](https://img.shields.io/crates/v/punkgo-jack.svg)](https://crates.io/crates/punkgo-jack)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/assets/roast-hero.png" alt="16 AI dog breeds — What kind of dog is your AI?" width="680">
-</p>
-
-<h3 align="center">What kind of dog is your AI?</h3>
+<h3 align="center">Every AI action gets a receipt.</h3>
 
 <p align="center">
-AI personality diagnosis based on your real coding data.<br>
-16 dog breeds. Meme radar. Shareable cards. No quiz.
+Cryptographic audit receipts for AI coding agents.<br>
+Ed25519 signatures. Merkle trees. RFC 3161 timestamps.
 </p>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.sh | bash
-punkgo-jack roast --png
 ```
-
-Oh, and it also does **cryptographic audit receipts** for every AI action. Ed25519 signatures, Merkle trees, RFC 3161 timestamps. The boring stuff that matters when things go wrong.
 
 ---
 
-**Contents:** [Roast](#roast) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Evolution](#evolution)
-
----
-
-## Roast
-
-Your AI has a personality. We proved it with math.
-
-```bash
-punkgo-jack roast              # terminal meme radar
-punkgo-jack roast --png        # shareable card → ./punkgo-roast.png
-punkgo-jack roast --svg        # vector card → ./punkgo-roast.svg
-punkgo-jack roast --today      # today's vibe only
-punkgo-jack roast --week       # last 7 days
-punkgo-jack roast help         # all options
-```
-
-16 MBTI-mapped personalities — Philosopher, Commander, Ghost, Speedrunner, Intern... each with a dog breed, a catchphrase, and a set of quips selected from your actual coding data.
-
-Six-axis meme radar: **Yapping** · **Googling** · **Grinding** · **Shipping** · **Tunnel Vision** · **Plot Armor**
-
-Config-driven. All 16 personalities live in a single TOML file — add your own or override at `~/.punkgo/roast.toml`.
-
-**See all 16 breeds** &rarr; [punkgo.ai/roast](https://punkgo.ai/roast)
+**Contents:** [Quick Start](#quick-start) · [Why receipts?](#why-receipts) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Evolution](#evolution) · [Roast](#punkgo-roast)
 
 ---
 
@@ -125,7 +95,6 @@ A root operator with the signing key could rebuild the tree — this is the sing
 
 | Command | Description |
 |---------|-------------|
-| `roast` | AI personality roast (try: `roast help`) |
 | `setup <tool>` | Install hooks (claude-code, cursor) |
 | `history` | Recent events table |
 | `show <ID>` | Event details + Merkle proof + TSA status |
@@ -136,6 +105,7 @@ A root operator with the signing key could rebuild the tree — this is the sing
 | `presence` | Energy heatmap across agents |
 | `export` | Export events as markdown or JSON |
 | `serve` | MCP server (7 tools for agent self-query) |
+| `roast` | AI personality diagnosis from local data (`roast help`) |
 | `upgrade` | Self-update (no re-setup needed) |
 
 ## Config
@@ -175,13 +145,21 @@ Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatica
 
 | Version | What changed |
 |---------|-------------|
-| **v0.5.4** | Roast — AI personality diagnosis, 16 MBTI dog breeds, shareable cards |
+| **v0.5.4** | Built-in `roast` command (local coding data analysis) |
 | v0.5.3 | Fix setup hang on macOS |
 | v0.5.2 | 10 hook events, Cursor BOM fix, semantic TSA rate limit |
 | v0.5.1 | TSA on by default, Windows install fix |
 | v0.5.0 | RFC 3161 TSA anchoring, verify-tsr, config system |
 | v0.4.1 | Cursor IDE support, dual-tool coexistence |
 | v0.4.0 | Verify, export, presence heatmap, MCP server |
+
+## PunkGo Roast
+
+Your AI has a personality. We built a test for it.
+
+**16 dog breeds. One prompt. Zero registration.** &rarr; [roast.punkgo.ai](https://roast.punkgo.ai)
+
+Jack also includes a built-in `punkgo-jack roast` command that analyzes your local coding data for personality signals. Run `punkgo-jack roast help` for details.
 
 ## License
 
