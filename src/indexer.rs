@@ -975,9 +975,12 @@ mod tests {
 
     #[test]
     fn scan_on_trigger_enqueues_pending_scan() {
+        // Fake-test review fix (2026-04-15): previous version only
+        // asserted `COUNT(*) >= 1`. Now asserts exact row fields —
+        // session_id, transcript_path, and that attempts has reached
+        // PENDING_SCAN_MAX_ATTEMPTS because the nonexistent path will
+        // have been drained synchronously and bumped to the ceiling.
         let _guard = DataDirGuard::new();
-        // Build a minimal jsonl so the scan can succeed eventually (the
-        // drainer might or might not run; we only assert the row landed).
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -988,14 +991,46 @@ mod tests {
                 .unwrap();
         });
 
-        // Open the DB and verify either the row is still pending OR it was
-        // drained (which would have failed because the path doesn't exist
-        // and incremented attempts). Either way, look at the table state.
+        // scan_on_trigger now drains synchronously (post-P1 fix), so on
+        // a nonexistent path the row has been retried up to the ceiling
+        // and is dead-lettered (still in the table for diagnosis).
         let conn = index::open_jack_db().unwrap();
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM pending_scans", [], |r| r.get(0))
+        let (session_id, transcript_path, attempts, last_error): (
+            String,
+            Option<String>,
+            i64,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT session_id, transcript_path, attempts, last_error \
+                 FROM pending_scans WHERE session_id = 'test-session-xyz'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
             .unwrap();
-        assert!(count >= 1, "expected pending_scans row to exist");
+        assert_eq!(session_id, "test-session-xyz");
+        assert_eq!(transcript_path.as_deref(), Some("/nonexistent/path"));
+        assert_eq!(
+            attempts, PENDING_SCAN_MAX_ATTEMPTS,
+            "dead-lettered after retry ceiling"
+        );
+        assert!(
+            last_error
+                .as_deref()
+                .map(|e| e.contains("transcript path missing") || e.contains("/nonexistent/path"))
+                .unwrap_or(false),
+            "last_error should reference the missing path, got {last_error:?}"
+        );
+
+        // Exactly one row for this session — no accidental duplicates.
+        let count_for_session: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pending_scans WHERE session_id = 'test-session-xyz'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_for_session, 1);
     }
 
     #[test]
@@ -1030,9 +1065,19 @@ mod tests {
     fn drain_pending_scans_retries_on_failure() {
         // P1 review fix (2026-04-15): drain now uses `continue` on failure
         // instead of `break`, and the SELECT filters `WHERE attempts < MAX`.
-        // This test verifies both: (1) a broken row is retried up to
-        // PENDING_SCAN_MAX_ATTEMPTS times within a single drain call, (2)
-        // once the ceiling is reached it stops being re-selected.
+        // This test verifies three invariants:
+        //   (1) a broken row is retried until PENDING_SCAN_MAX_ATTEMPTS is
+        //       reached within a single drain call, then excluded from
+        //       subsequent drains (dead-lettered).
+        //   (2) the dead-lettered row stays in the table for operator
+        //       inspection (not silently deleted).
+        //   (3) **a valid row enqueued BEHIND a dead-lettered row is still
+        //       processed** — this is the core starvation guarantee that
+        //       the P1 #2 fix closed. The previous version of this test
+        //       enqueued ANOTHER broken row, which only proved "attempts
+        //       increments on second bad row"; it did NOT prove that a
+        //       healthy row could make progress past a dead head. Fake-test
+        //       review (2026-04-15) caught this.
         let _guard = DataDirGuard::new();
         enqueue_pending_scan("sess-missing", Some("/no/such/file.jsonl")).unwrap();
 
@@ -1049,11 +1094,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             attempts, PENDING_SCAN_MAX_ATTEMPTS,
-            "row should be retried until it hits the ceiling"
+            "broken row should be retried until it hits the ceiling"
         );
 
-        // Second drain must be a no-op: the row is dead-lettered and the
-        // WHERE filter excludes it. Row stays in the table for diagnosis.
+        // Second drain must be a no-op for the dead row: the row is
+        // dead-lettered and the WHERE filter excludes it.
         let processed2 = drain_pending_scans().unwrap();
         assert_eq!(processed2, 0);
         let row_still_there: i64 = conn
@@ -1065,24 +1110,56 @@ mod tests {
             .unwrap();
         assert_eq!(row_still_there, 1, "dead-lettered row stays for diagnosis");
 
-        // A fresh healthy row enqueued behind the dead one must NOT be
-        // starved — this is the whole point of the P1 #2 fix.
-        // We can't easily make a row that succeeds in this test setup (it
-        // would require a real transcript file), so we just assert that a
-        // second enqueue of the same sess-missing (with attempts reset to 0
-        // via a new row id) progresses at least one iteration.
-        enqueue_pending_scan("sess-behind", Some("/also/missing.jsonl")).unwrap();
-        let _ = drain_pending_scans().unwrap(); // drains, both eventually dead-letter
-        let count_behind: i64 = conn
+        // --- the real starvation test ---
+        // Enqueue a VALID row behind the dead one. The drain must process
+        // it despite the dead row sitting at the head of the queue.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let good_line = synth_assistant_line("turn-good", "sess-good", true);
+        let good_path = write_synth_jsonl(tmp.path(), "sess-good", &[good_line]);
+        enqueue_pending_scan("sess-good", Some(good_path.to_str().unwrap())).unwrap();
+
+        let processed3 = drain_pending_scans().unwrap();
+        assert_eq!(
+            processed3, 1,
+            "valid row behind dead-lettered row must be processed"
+        );
+
+        // The valid row must be gone (drained + deleted), and its turn
+        // must have actually landed in the turns table.
+        let good_still_pending: i64 = conn
             .query_row(
-                "SELECT attempts FROM pending_scans WHERE session_id = 'sess-behind'",
+                "SELECT COUNT(*) FROM pending_scans WHERE session_id = 'sess-good'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(
-            count_behind >= 1,
-            "behind row must be attempted at least once (was {count_behind})"
+        assert_eq!(
+            good_still_pending, 0,
+            "successfully drained row must be deleted from pending_scans"
+        );
+        let good_turns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM turns WHERE session_id = 'sess-good'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            good_turns, 1,
+            "valid row's turn must be indexed into the turns table"
+        );
+
+        // The dead row must still be sitting there, undisturbed.
+        let dead_still_there: i64 = conn
+            .query_row(
+                "SELECT attempts FROM pending_scans WHERE session_id = 'sess-missing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            dead_still_there, PENDING_SCAN_MAX_ATTEMPTS,
+            "dead row attempts counter must stay at the ceiling"
         );
     }
 
@@ -1302,6 +1379,153 @@ mod tests {
         );
     }
 
+    /// Build a synthetic user-prompt jsonl line with an embedded needle
+    /// string. Used to drive end-to-end privacy tests through the real
+    /// scanner → indexer → upsert pipeline (not a metadata-only pre-
+    /// sanitized pass).
+    fn synth_user_line(uuid: &str, session_id: &str, text: &str) -> String {
+        let obj = serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": null,
+            "sessionId": session_id,
+            "timestamp": "2026-04-15T12:00:00.000Z",
+            "cwd": "/tmp/work",
+            "isSidechain": false,
+            "version": "2.0.0",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            }
+        });
+        serde_json::to_string(&obj).unwrap()
+    }
+
+    /// Real end-to-end privacy test: raw jsonl body text MUST NOT reach
+    /// the jack.db via the full `run_reindex` pipeline (scan_file →
+    /// build_turn_record → build_content_blocks_meta → upsert_turn).
+    ///
+    /// This test replaces the old `upsert_turn_no_text_leak` in
+    /// `src/index/turns.rs`, which was a fake (the test body pre-built
+    /// a sanitized content_blocks_meta JSON and passed it to upsert_turn,
+    /// proving only that SQLite does not invent text that was never
+    /// inserted). The real invariant requires driving the scanner's
+    /// extraction path, which this test does via `run_reindex(full=true)`
+    /// on a synthetic archive containing a user prompt whose body text
+    /// carries a distinctive needle string.
+    #[test]
+    fn pipeline_no_text_leak_from_user_prompt() {
+        let guard = DataDirGuard::new();
+        let archive_root = guard._tmp.path();
+        let projects = archive_root
+            .join(".claude")
+            .join("projects")
+            .join("test-priv");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let needle = "ULTRASECRET_PIPELINE_LEAK_NEEDLE_abc123";
+        let mut secret = String::new();
+        while secret.len() < 10 * 1024 {
+            secret.push_str(needle);
+            secret.push(' ');
+        }
+        let line = synth_user_line("u-leak", "sess-pipe-priv", &secret);
+        write_synth_jsonl(&projects, "sess-pipe-priv", &[line]);
+
+        // Drive the full reindex pipeline.
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", archive_root);
+        let report = run_reindex(ReindexOptions {
+            full: true,
+            ..Default::default()
+        })
+        .unwrap();
+        if let Some(h) = prev_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert_eq!(report.files_scanned, 1, "expected exactly 1 file scanned");
+        assert_eq!(report.turns_upserted, 1, "expected exactly 1 turn upserted");
+
+        // Scan EVERY TEXT column of the turns row and the sessions row,
+        // asserting the needle is nowhere. This is the real invariant.
+        // We query each column individually to keep rusqlite's tuple
+        // type signatures under clippy's `type_complexity` threshold.
+        let conn = index::open_jack_db().unwrap();
+
+        for col in [
+            "turn_uuid",
+            "content_blocks_meta",
+            "cwd",
+            "git_branch",
+            "slug",
+            "claude_code_version",
+            "request_id",
+            "message_id",
+            "model",
+            "model_variant",
+            "service_tier",
+            "stop_reason",
+            "kernel_event_id",
+            "scanned_at",
+        ] {
+            let sql = format!(
+                "SELECT COALESCE({col}, '') FROM turns WHERE session_id = 'sess-pipe-priv'"
+            );
+            let val: String = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
+            assert!(
+                !val.contains(needle),
+                "PRIVACY VIOLATION: needle '{needle}' leaked into turns.{col}. \
+                 First 200 chars: {:?}",
+                val.chars().take(200).collect::<String>()
+            );
+        }
+
+        for col in [
+            "transcript_path",
+            "cwd_initial",
+            "git_branch_initial",
+            "git_commit_initial",
+            "tool_version",
+            "os_info",
+            "permission_mode",
+            "model_initial",
+            "distinct_model_variants",
+        ] {
+            let sql = format!(
+                "SELECT COALESCE({col}, '') FROM sessions \
+                 WHERE session_id = 'sess-pipe-priv'"
+            );
+            let val: String = conn.query_row(&sql, [], |r| r.get(0)).unwrap();
+            assert!(
+                !val.contains(needle),
+                "PRIVACY VIOLATION: needle leaked into sessions.{col}"
+            );
+        }
+
+        // Positive check: content_blocks_meta DID record the byte length,
+        // proving the text was actually SEEN by the scanner and its size
+        // measured — the test is not vacuously passing because the line
+        // was silently dropped.
+        let cbm_str: String = conn
+            .query_row(
+                "SELECT content_blocks_meta FROM turns WHERE session_id = 'sess-pipe-priv'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let cbm: serde_json::Value = serde_json::from_str(&cbm_str).expect("valid cbm JSON");
+        let arr = cbm.as_array().expect("content_blocks_meta is array");
+        assert!(!arr.is_empty(), "at least one content block expected");
+        let byte_len = arr[0]["byte_len"].as_u64().expect("byte_len present");
+        assert!(
+            byte_len >= 10 * 1024,
+            "byte_len should reflect the full secret text, got {byte_len}"
+        );
+    }
+
     #[test]
     fn reconcile_on_startup_drains_queue() {
         let _guard = DataDirGuard::new();
@@ -1369,15 +1593,38 @@ mod tests {
 
     /// Dogfood acceptance gate. Run manually with:
     ///   cargo test dogfood_reindex_real_archive -- --ignored --nocapture
+    ///
     /// This walks the real `~/.claude/projects/` archive and asserts the
-    /// indexer produces sensible counts and no body-text leakage. Privacy
-    /// audit asserts a known distinctive English phrase from a real session
-    /// is absent from `content_blocks_meta` — proving the metadata-only
-    /// invariant on real data.
+    /// indexer produces sensible counts AND does not leak real body text
+    /// into jack.db. The privacy check uses needles sampled from actual
+    /// jsonl body text before reindex runs, so a leak would surface as
+    /// "your own prompt showed up in the DB".
+    ///
+    /// Fake-test review fix (2026-04-15): the previous version used
+    /// synthetic / hypothetical needles (`felixx9527`, `blob_hash`,
+    /// `claude code is`) — none of which would ever appear in real
+    /// assistant/user body text, so the check was vacuous. The fix
+    /// below samples 3 distinctive 40-char substrings directly from
+    /// the user's actual archive, then asserts those exact substrings
+    /// are NOT anywhere in any TEXT column of the turns table after
+    /// reindex. A real leak bug would now fail this test.
     #[test]
     #[ignore]
     fn dogfood_reindex_real_archive() {
         let _guard = DataDirGuard::new();
+
+        // --- Phase 1: sample real body-text needles BEFORE reindex ---
+        let needles = sample_body_text_needles_from_real_archive(3);
+        assert!(
+            !needles.is_empty(),
+            "must sample at least one real needle; archive may be empty"
+        );
+        eprintln!(
+            "dogfood: sampled {} privacy needles from real archive",
+            needles.len()
+        );
+
+        // --- Phase 2: reindex ---
         let report = run_reindex(ReindexOptions {
             full: true,
             ..Default::default()
@@ -1410,57 +1657,188 @@ mod tests {
         assert!(numbat >= 1000, "numbat >= 1000 (got {numbat})");
         assert!(opus >= 900, "claude-opus-4-6 >= 900 (got {opus})");
 
-        // Idempotency against a growing live archive is not checkable:
-        // running this test against `~/.claude/projects/` means *this
-        // very process* is writing new lines to its own jsonl as the
-        // tests execute, so a second reindex sees strictly MORE turns
-        // than the first. Idempotency on static data is already
-        // enforced by `reindex_is_idempotent` on a synthetic archive;
-        // the dogfood test is scoped to "real data produces sensible
-        // floors" and deliberately skips equality assertions across
-        // re-runs.
-
-        // Privacy audit: assert known distinctive strings are NOT in the DB.
-        // These are English phrases unlikely to appear in any model identifier
-        // or hash; if they show up in content_blocks_meta the privacy
-        // invariant is broken.
-        let needles = [
-            "felixx9527",     // user email handle
-            "blob_hash",      // jack internal but not metadata
-            "claude code is", // hypothetical body fragment
-        ];
+        // --- Phase 3: real-body needle privacy audit ---
+        // For each needle sampled from actual body text, assert it does
+        // NOT appear in ANY TEXT column of the turns or sessions table.
+        // The needles are real fragments from the user's own archive;
+        // if they show up in jack.db after reindex, real body text has
+        // leaked through the scanner → indexer → upsert pipeline.
         let conn = index::open_jack_db().unwrap();
-        for needle in needles {
+        for needle in &needles {
             let pattern = format!("%{needle}%");
-            let n: i64 = conn
+            let turn_hits: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM turns WHERE content_blocks_meta LIKE ?1",
+                    "SELECT COUNT(*) FROM turns WHERE \
+                     content_blocks_meta LIKE ?1 OR \
+                     COALESCE(cwd, '') LIKE ?1 OR \
+                     COALESCE(slug, '') LIKE ?1 OR \
+                     COALESCE(model, '') LIKE ?1 OR \
+                     COALESCE(model_variant, '') LIKE ?1 OR \
+                     COALESCE(stop_reason, '') LIKE ?1",
                     params![pattern],
                     |r| r.get(0),
                 )
                 .unwrap();
             assert_eq!(
-                n, 0,
-                "PRIVACY: needle '{needle}' leaked into content_blocks_meta"
+                turn_hits,
+                0,
+                "PRIVACY VIOLATION: real body-text needle leaked into turns row. \
+                 Needle (first 40 chars): {:?}",
+                &needle.chars().take(40).collect::<String>()
+            );
+
+            let sess_hits: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE \
+                     COALESCE(transcript_path, '') LIKE ?1 OR \
+                     COALESCE(cwd_initial, '') LIKE ?1 OR \
+                     COALESCE(model_initial, '') LIKE ?1 OR \
+                     COALESCE(distinct_model_variants, '') LIKE ?1",
+                    params![pattern],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                sess_hits, 0,
+                "PRIVACY VIOLATION: real body-text needle leaked into sessions row"
             );
         }
 
-        // Aggregate sanity: hidden tokens estimate is in a wide expected range.
-        // 2026-04-15 dogfood baseline on ~377 real sessions produced ~11M
-        // hidden tokens — roughly 4x the plan's original 1–3M estimate. The
-        // plan's number was a rough guess without real data; this is the true
-        // number. Floor is a conservative sanity check (below 1M would mean
-        // the formula is broken); ceiling accommodates natural archive growth.
-        let total_hidden: i64 = conn
+        // --- Phase 4: aggregate self-consistency ---
+        // SUM(estimated_hidden_tokens) across all turns must equal the
+        // sum recomputed from the per-turn formula applied to visible
+        // bytes + output_tokens. This is a tighter invariant than the
+        // old "[1M, 100M] range" check: it proves the aggregate math
+        // is self-consistent rather than "in the right order of
+        // magnitude".
+        let (db_sum, recomputed_sum): (i64, i64) = conn
             .query_row(
-                "SELECT COALESCE(SUM(estimated_hidden_tokens), 0) FROM turns",
+                r#"SELECT
+                    COALESCE(SUM(estimated_hidden_tokens), 0),
+                    COALESCE(SUM(MAX(
+                      0,
+                      COALESCE(output_tokens, 0) -
+                        ((COALESCE(visible_text_bytes, 0) +
+                          COALESCE(visible_tool_use_bytes, 0) + 3) / 4)
+                    )), 0)
+                   FROM turns"#,
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert!(
-            (1_000_000..=100_000_000).contains(&total_hidden),
-            "total_hidden_tokens_est out of sanity range: {total_hidden}"
+        assert_eq!(
+            db_sum, recomputed_sum,
+            "estimated_hidden_tokens aggregate must be self-consistent with the per-turn formula"
         );
+
+        // Floor sanity check: at least some hidden tokens exist on a
+        // real archive. Below 1M would indicate the formula is
+        // producing near-zero for every turn, which means either
+        // visible_bytes is being double-counted or output_tokens is
+        // missing.
+        assert!(
+            db_sum >= 1_000_000,
+            "hidden token total too low: {db_sum}; formula likely broken"
+        );
+    }
+
+    /// Sample `n` distinctive ≥ 40-char substrings of real body text
+    /// from the user's `~/.claude/projects/` archive. Used by the
+    /// dogfood test to construct realistic privacy needles.
+    ///
+    /// This runs BEFORE reindex so it reads the raw jsonl directly.
+    /// The samples are ephemeral test-local Strings — not persisted,
+    /// not logged (except on failure, where the leaked needle is the
+    /// point of the failure), not transmitted. The function returns
+    /// at most `n` needles; if the archive is empty or no suitable
+    /// text blocks exist, returns an empty Vec and the caller asserts
+    /// the emptiness.
+    fn sample_body_text_needles_from_real_archive(n: usize) -> Vec<String> {
+        let root = match crate::session::home_dir() {
+            Some(h) => h.join(".claude").join("projects"),
+            None => return Vec::new(),
+        };
+        if !root.exists() {
+            return Vec::new();
+        }
+
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        // Shuffle via a simple deterministic rotation so we don't always
+        // sample from the same files (which might be atypical).
+        files.sort();
+        let stride = files.len().max(1) / n.max(1);
+
+        let mut needles: Vec<String> = Vec::new();
+        let mut idx = 0usize;
+        while needles.len() < n && idx < files.len() {
+            let file = &files[idx];
+            idx += stride.max(1);
+            let Ok(content) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            for line in content.lines() {
+                let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                let entry_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if entry_type != "assistant" && entry_type != "user" {
+                    continue;
+                }
+                let Some(content_arr) = obj
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                else {
+                    continue;
+                };
+                for block in content_arr {
+                    let Some(kind) = block.get("type").and_then(|t| t.as_str()) else {
+                        continue;
+                    };
+                    if kind != "text" {
+                        continue;
+                    }
+                    let Some(text) = block.get("text").and_then(|t| t.as_str()) else {
+                        continue;
+                    };
+                    // Find a 40-char window that is all printable ASCII,
+                    // skipping any leading whitespace and picking from the
+                    // middle (not the first 50 chars to avoid boilerplate
+                    // like "I need to...").
+                    let trimmed = text.trim();
+                    if trimmed.len() < 150 {
+                        continue;
+                    }
+                    let start = 50.min(trimmed.len().saturating_sub(40));
+                    let end = (start + 40).min(trimmed.len());
+                    let window = &trimmed[start..end];
+                    if window.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+                        && !needles.iter().any(|n| n == window)
+                    {
+                        needles.push(window.to_string());
+                        if needles.len() >= n {
+                            return needles;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        needles
     }
 }

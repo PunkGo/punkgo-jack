@@ -830,124 +830,13 @@ mod tests {
         }
     }
 
-    /// Dogfood test: walk the real ~/.claude/projects/ archive and print stats.
-    /// Gated behind `#[ignore]` so it doesn't run in CI and doesn't touch real
-    /// user data on `cargo test`. Run manually with:
-    ///   cargo test dogfood_real_jsonl_archive -- --ignored --nocapture
-    /// Privacy: relies on the TurnRecord never storing text bodies (audited by
-    /// test_scan_no_text_leak). This test prints only counts and identifiers.
-    #[test]
-    #[ignore]
-    fn dogfood_real_jsonl_archive() {
-        let root = crate::session::home_dir()
-            .expect("home dir")
-            .join(".claude")
-            .join("projects");
-        if !root.exists() {
-            eprintln!("SKIP: {} does not exist", root.display());
-            return;
-        }
-
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                    out.push(path);
-                }
-            }
-        }
-
-        let mut files = Vec::new();
-        walk(&root, &mut files);
-        eprintln!("found {} jsonl files", files.len());
-
-        let mut total_turns = 0usize;
-        let mut files_with_thinking = 0usize;
-        let mut total_thinking_blocks = 0usize;
-        let mut total_text_blocks = 0usize;
-        let mut total_tool_use_blocks = 0usize;
-        let mut signatures_parsed = 0usize;
-        let mut model_variant_hits = 0usize;
-        let mut variant_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        let mut scan_failures = 0usize;
-
-        for (i, path) in files.iter().enumerate() {
-            let records = match TranscriptScanner::scan_file(path) {
-                Ok(r) => r,
-                Err(_) => {
-                    scan_failures += 1;
-                    continue;
-                }
-            };
-            let mut file_thinking = 0usize;
-            for r in &records {
-                total_turns += 1;
-                for block in &r.content_blocks {
-                    match block {
-                        ContentBlockRecord::Thinking {
-                            signature_b64,
-                            signature_bytes: _,
-                            ..
-                        } => {
-                            total_thinking_blocks += 1;
-                            file_thinking += 1;
-                            if let Ok(meta) =
-                                crate::signature::parse_thinking_signature(signature_b64)
-                            {
-                                signatures_parsed += 1;
-                                if let Some(v) = meta.model_variant {
-                                    model_variant_hits += 1;
-                                    *variant_counts.entry(v).or_insert(0) += 1;
-                                }
-                            }
-                        }
-                        ContentBlockRecord::Text { .. } => total_text_blocks += 1,
-                        ContentBlockRecord::ToolUse { .. } => total_tool_use_blocks += 1,
-                        ContentBlockRecord::ToolResult { .. } => {}
-                    }
-                }
-            }
-            if file_thinking > 0 {
-                files_with_thinking += 1;
-            }
-            if (i + 1) % 50 == 0 {
-                eprintln!("  progress: {}/{} files", i + 1, files.len());
-            }
-        }
-
-        eprintln!("\n== DOGFOOD SCAN RESULTS ==");
-        eprintln!("files scanned        : {}", files.len() - scan_failures);
-        eprintln!("  scan failures      : {scan_failures}");
-        eprintln!("files with thinking  : {files_with_thinking}");
-        eprintln!("total turns          : {total_turns}");
-        eprintln!("  text blocks        : {total_text_blocks}");
-        eprintln!("  tool_use blocks    : {total_tool_use_blocks}");
-        eprintln!("  thinking blocks    : {total_thinking_blocks}");
-        eprintln!("signatures parsed ok : {signatures_parsed}");
-        eprintln!(
-            "model_variant hits   : {model_variant_hits}  ({:.1}% of thinking)",
-            if total_thinking_blocks > 0 {
-                100.0 * model_variant_hits as f64 / total_thinking_blocks as f64
-            } else {
-                0.0
-            }
-        );
-        eprintln!("variant breakdown:");
-        let mut sorted: Vec<_> = variant_counts.iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(a.1));
-        for (v, c) in sorted {
-            eprintln!("  {c:6}  {v}");
-        }
-
-        assert!(
-            !files.is_empty(),
-            "no jsonl files found — sanity check failed"
-        );
-    }
+    // NOTE (2026-04-15 fake-test review): a `dogfood_real_jsonl_archive`
+    // test previously lived here. It walked `~/.claude/projects/`,
+    // printed a stats summary, and asserted only "files.len() > 0" —
+    // which degenerates to "there is at least one jsonl file on disk".
+    // That assertion is vacuous for a real-data acceptance gate. The
+    // stronger replacement lives in `indexer::tests::dogfood_reindex_real_archive`
+    // which drives the full pipeline, asserts real body-text needle
+    // absence, and checks aggregate self-consistency. This scanner-
+    // local dogfood test was deleted rather than kept as dead reporting.
 }

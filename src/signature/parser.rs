@@ -111,41 +111,30 @@ pub fn parse_thinking_signature(sig_b64: &str) -> anyhow::Result<SignatureMeta> 
         }
     }
 
-    // Primary match: try each priority regex against each extracted run.
-    // Use `.find()` so framing garbage attached to the run (e.g. `2"numbat-...8`)
+    // Match: try each priority regex against each extracted run. Use
+    // `.find()` so framing garbage attached to the run (e.g. `2"numbat-...8`)
     // still yields a clean match.
+    //
+    // Historical note (2026-04-15 fake-test review): an earlier version had
+    // a "fallback" pass that replaced every non-printable byte with an ASCII
+    // space and re-ran the regex on the mutated blob, claiming it recovered
+    // variants that the primary run extractor missed. That pass was proven
+    // dead for the current regex family: none of the priority patterns can
+    // match a string containing an interior space, so the fallback could
+    // never produce a match the primary path didn't already find.
+    //
+    // Two tests in this module (`test_parse_fallback_split_on_nonprintable`
+    // and `test_parse_fallback_actually_helps`) self-documented the dead-
+    // code status in long comment blocks and ended up only asserting "no
+    // panic + correct byte count" — classic fake-test theater. Both the
+    // fallback code and its fake tests were removed rather than kept as
+    // "defensive dead code" per the project's no-debt rule.
     let mut model_variant: Option<String> = None;
     'outer: for pat in PRIORITY_PATTERNS.iter() {
         for s in &extracted_strings {
             if let Some(m) = pat.find(s) {
                 model_variant = Some(m.as_str().to_string());
                 break 'outer;
-            }
-        }
-    }
-
-    // Fallback: if no priority pattern matched any run, some signatures have
-    // non-printable bytes interrupting the model variant string (hypothesis
-    // from baseline scan: ~48% miss rate with run-based extraction alone).
-    // Replace every non-printable byte with ASCII space and re-scan the full
-    // mutated payload with the priority regexes. This catches strings like
-    // `numbat-v6\x00efforts-10-20-40-ab-prod` that a contiguous-run extractor
-    // would split into two sub-MIN_RUN_LEN fragments.
-    if model_variant.is_none() {
-        let mut mutated = Vec::with_capacity(decoded.len());
-        for &b in &decoded {
-            if (0x20..=0x7e).contains(&b) {
-                mutated.push(b);
-            } else {
-                mutated.push(b' ');
-            }
-        }
-        // SAFETY: mutated bytes are all in [0x20, 0x7e] which is valid UTF-8.
-        let mutated_str = std::str::from_utf8(&mutated).unwrap_or_default();
-        for pat in PRIORITY_PATTERNS.iter() {
-            if let Some(m) = pat.find(mutated_str) {
-                model_variant = Some(m.as_str().to_string());
-                break;
             }
         }
     }
@@ -232,16 +221,20 @@ mod tests {
 
     #[test]
     fn test_parse_claude_haiku_variant() {
+        // Fake-test review fix (2026-04-15): previous version used
+        // `starts_with("claude-haiku-4-5-20251001")` which allowed any
+        // trailing over-capture (e.g. `claude-haiku-4-5-202510012`) to
+        // pass. Tightened to exact equality so an over-capturing regex
+        // regression is caught immediately.
         let mut payload: Vec<u8> = vec![0xff, 0xfe, 0xfd];
         payload.extend_from_slice(b"2\"claude-haiku-4-5-20251001\x00end");
         let b64 = encode(&payload);
 
         let meta = parse_thinking_signature(&b64).unwrap();
         let mv = meta.model_variant.expect("should match claude-haiku");
-        assert!(
-            mv.starts_with("claude-haiku-4-5-20251001"),
-            "expected claude-haiku-4-5-20251001 prefix, got {:?}",
-            mv
+        assert_eq!(
+            mv, "claude-haiku-4-5-20251001",
+            "trailing framing byte must be stripped"
         );
     }
 
@@ -271,160 +264,20 @@ mod tests {
         assert_eq!(meta.bytes, payload.len());
     }
 
-    #[test]
-    fn test_parse_fallback_split_on_nonprintable() {
-        // numbat string interrupted by a null byte — primary run extraction
-        // yields "numbat-v6" (length 9) and "efforts-10-20-40-ab-prod". The
-        // first *does* match `numbat-v\d+` via the priority regex, so the
-        // fallback isn't strictly needed in this case. To exercise the
-        // fallback path, use a split that leaves BOTH halves below the
-        // min-run threshold OR neither half matches the priority regex.
-        //
-        // We use: split `numbat` itself so both halves are too short to be
-        // recognizable: `num\x00bat-v6-efforts-10-20-40-ab-prod`.
-        let mut payload: Vec<u8> = vec![];
-        payload.extend_from_slice(b"num");
-        payload.push(0x00);
-        payload.extend_from_slice(b"bat-v6-efforts-10-20-40-ab-prod");
-        let b64 = encode(&payload);
-
-        let meta = parse_thinking_signature(&b64).unwrap();
-        // Fallback replaces null with space, yielding the string
-        // `num bat-v6-efforts-10-20-40-ab-prod`. The numbat regex matches
-        // `numbat-v6-efforts-10-20-40-ab-prod`? No — there's a space between
-        // `num` and `bat`, so the regex won't match either. Adjust: the
-        // fallback must still produce the clean string to match. Let me
-        // use a non-printable BETWEEN model variant chars rather than
-        // splitting the model name itself.
-        //
-        // Wait: that's what the spec said. Let me re-read... "numbat string
-        // is interrupted by a null byte: `numbat-v6\x00efforts-10-20-40-ab-prod`".
-        // Primary run 1: "numbat-v6" (9 chars). Regex `numbat-v\d+[\w\-]*`
-        // matches "numbat-v6" — so primary path succeeds. Not a fallback test.
-        //
-        // For a true fallback test, the primary must fail. That means no
-        // single contiguous run matches ANY priority regex. Use:
-        // `num\x00bat-v6` + `\x00efforts-10`. Primary runs: "num", "bat-v6"
-        // (both too short OR neither matches numbat regex). Fallback scans
-        // the whole mutated blob as `num bat-v6 efforts-10` — still no
-        // match for `numbat-v\d+` because of the space.
-        //
-        // Alternative: use a non-printable byte INSIDE a digit run that
-        // breaks a priority-3 haiku string. Use:
-        // `claude-haiku-4\x00-5-20251001` → primary runs: `claude-haiku-4`
-        // (matches priority 3!) — not a fallback.
-        //
-        // The fallback only kicks in when no primary run matches. A case:
-        // `cla\x00ude-opus-4-6` → primary runs: `cla` (too short),
-        // `ude-opus-4-6` (matches nothing). Fallback mutates to
-        // `cla ude-opus-4-6` → still no match.
-        //
-        // Given the extraction rules, the fallback genuinely only helps
-        // when non-printables appear INSIDE the model string between the
-        // prefix `numbat-v6-` and the suffix, AFTER the prefix already
-        // meets the regex. But the regex matches greedily starting from
-        // the prefix, so it always wins on primary if the prefix is intact.
-        //
-        // Conclusion: the fallback is a belt-and-suspenders path that rarely
-        // helps given our regex structure. We test that IT DOESN'T BREAK
-        // anything — run it with valid input where primary already matches.
-        let _ = meta;
-        let _ = payload;
-
-        // Construct a case where primary finds nothing and fallback must
-        // produce the match from runs the regex skipped:
-        // Use `claude-opus-4-6` but intersperse non-printables between every
-        // pair of chars, producing length-1 runs that are all skipped.
-        let mut payload2: Vec<u8> = Vec::new();
-        for ch in b"claude-opus-4-6" {
-            payload2.push(*ch);
-            payload2.push(0x00);
-        }
-        let b64_2 = encode(&payload2);
-        let meta2 = parse_thinking_signature(&b64_2).unwrap();
-        // Primary extraction: all runs are length 1 → none ≥ 4, extracted_strings empty.
-        // Fallback: mutates to `c l a u d e - o p u s - 4 - 6 ` — spaces between,
-        // still no regex match.
-        //
-        // Given regex structure, fallback only recovers model variants if the
-        // contiguous STRING of the model name survives after space-replacement.
-        // A realistic case: non-printable bytes OUTSIDE the model name but no
-        // valid ≥4-char run happens to exist anywhere (so extracted_strings
-        // is empty) — then fallback scans the mutated blob which includes
-        // the intact model name sandwiched with one space-replacement.
-        //
-        // Example: one non-printable `\xff` immediately followed by
-        // `claude-opus-4-6` followed by more non-printables. Primary:
-        // extracts "claude-opus-4-6" (all printable, 15 chars) → matches.
-        // Not a fallback test.
-        //
-        // Example: `claude-opus-4-6\xff\xfeANOTHER\xffmodel-claude-opus-5-0`.
-        // Primary matches the FIRST run "claude-opus-4-6". Not fallback.
-        //
-        // The fallback is genuinely only useful for a specific degenerate
-        // case that doesn't map cleanly to our regex. We keep the fallback
-        // code for forensic robustness and test that it's at least
-        // exercised without panicking. Assert meta2 doesn't panic and has
-        // the expected bytes count.
-        assert_eq!(meta2.bytes, payload2.len());
-        // model_variant may or may not match depending on extraction path;
-        // this test primarily guards against panics in the fallback.
-    }
-
-    #[test]
-    fn test_parse_fallback_actually_helps() {
-        // Construct a case where primary extraction produces NO runs ≥ 4
-        // chars, but the fallback (replacing non-printables with space)
-        // produces a string that contains the intact numbat substring.
-        //
-        // Strategy: put non-printable bytes every 3 chars OUTSIDE the model
-        // variant, and the model variant itself immediately adjacent to a
-        // non-printable on both sides — the primary run IS the model
-        // variant (≥ 4 chars), so primary wins. This is always the case:
-        // if the model variant is intact as a contiguous run ≥ 4, primary
-        // wins.
-        //
-        // True fallback-only case: primary fails because of a 4-char
-        // threshold on partial matches. Example: `nu\xffmbat-v6-efforts-10-20-40-ab-prod`.
-        // Runs: "nu" (< 4, dropped), "mbat-v6-efforts-10-20-40-ab-prod" (31
-        // chars, kept, but NO priority regex matches "mbat-..."). Primary
-        // fails. Fallback mutates to `nu mbat-v6-efforts-10-20-40-ab-prod`
-        // — still no numbat substring.
-        //
-        // Different strategy: `x\xffnumbat-v6-efforts` → runs "x" (< 4),
-        // "numbat-v6-efforts" → matches primary. Wins.
-        //
-        // The honest conclusion is that our fallback replaces non-printables
-        // with SPACE, which never fuses split halves of the model name into
-        // one. The fallback only helps if we replaced with empty string, but
-        // that would create false positives (fusing unrelated adjacent ASCII).
-        //
-        // Minimal test: just verify the fallback doesn't panic on empty
-        // primary extraction and a mutated string that happens to contain
-        // the model name in a run that was discarded only for being adjacent
-        // to a length-3 run.
-        //
-        // Construct: 3 printable + 1 non-printable + model variant. Primary:
-        // "abc" (len 3, dropped), "numbat-v6" (len 9, matches). Primary wins.
-        //
-        // OK — final honest test: use a case where the extracted runs list
-        // omits the match due to our min-len threshold BUT the fallback
-        // picks it up. That only works if the model name itself is split
-        // across a non-printable. We've established: our regex is anchored
-        // to the prefix, so a split inside the prefix kills both paths, and
-        // a split after the prefix only helps primary.
-        //
-        // Conclusion: our fallback is defensive dead code for the current
-        // regex family. We document and keep it, and this test simply
-        // verifies the code path is exercised (no panic, correct bytes).
-        let payload = b"abc\xff\xfenumbat-v6-efforts-10-20-40-ab-prod";
-        let b64 = encode(payload);
-        let meta = parse_thinking_signature(&b64).unwrap();
-        assert_eq!(
-            meta.model_variant.as_deref(),
-            Some("numbat-v6-efforts-10-20-40-ab-prod")
-        );
-    }
+    // NOTE (2026-04-15 fake-test review): two tests named
+    // `test_parse_fallback_split_on_nonprintable` and
+    // `test_parse_fallback_actually_helps` previously lived here. Both
+    // self-documented in long comment blocks that they could not
+    // actually exercise the fallback path against the current regex
+    // family, and ended up only asserting "no panic + correct byte
+    // count". They were deleted alongside the dead fallback code they
+    // claimed to cover — the fallback replaced non-printable bytes
+    // with ASCII space, and none of the priority patterns can match
+    // a string with an interior space, so the fallback could never
+    // produce a match that the primary run extractor did not already
+    // find. Keeping fake tests around to "document" dead code is
+    // worse than deleting both: the tests give false confidence and
+    // the code gives false optionality.
 
     #[test]
     fn test_parse_invalid_base64() {

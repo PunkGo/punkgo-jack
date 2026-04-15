@@ -866,6 +866,13 @@ mod tests {
 
     #[test]
     fn transform_stop() {
+        // Fake-test review fix (2026-04-15): previously asserted only
+        // that the `last_assistant_message` key existed. The Lane A
+        // truncation-removal refactor routes this field through
+        // `externalize_or_inline`, which returns `{"inline": ...}` for
+        // small inputs. Without checking the inline value, a regression
+        // where the helper returned `{"inline": ""}` (losing the message)
+        // would pass silently. Now asserts exact value preservation.
         let adapter = ClaudeCodeAdapter;
         let raw = json!({
             "hook_event_name": "Stop",
@@ -875,7 +882,18 @@ mod tests {
         let event = adapter.transform(&raw).unwrap();
         assert_eq!(event.event_type, "agent_stop");
         assert_eq!(event.target, "session:Stop");
-        assert!(event.metadata.contains_key("last_assistant_message"));
+        let last = event
+            .metadata
+            .get("last_assistant_message")
+            .expect("last_assistant_message key missing");
+        let inline = last
+            .get("inline")
+            .and_then(Value::as_str)
+            .expect("small message should be inline");
+        assert_eq!(
+            inline, "Done! All tests pass.",
+            "inline message must byte-match the original"
+        );
     }
 
     #[test]
@@ -1269,13 +1287,21 @@ mod tests {
             Some(&json!(180_000))
         );
         // Summary externalized through blob helper; small → inline shape.
+        // Fake-test review fix (2026-04-15): previously asserted only
+        // that `inline` key exists. Now also asserts the inline value
+        // equals the original — catches a regression where the helper
+        // might silently drop or truncate the body for small inputs.
         let compact_summary = event
             .metadata
             .get("compact_summary")
             .expect("compact_summary key missing");
-        assert!(
-            compact_summary.get("inline").is_some(),
-            "small summary should be inline"
+        let inline_val = compact_summary
+            .get("inline")
+            .and_then(Value::as_str)
+            .expect("small summary should be inline");
+        assert_eq!(
+            inline_val, "compressed conversation state",
+            "inline summary must byte-match the original"
         );
     }
 
@@ -1317,22 +1343,27 @@ mod tests {
         assert_eq!(event.metadata.get("reason"), Some(&json!("user_declined")));
     }
 
-    /// Privacy audit: all 5 new event types must never leak raw body
-    /// content into any string field we construct. PostCompact is the
-    /// highest-risk surface because it carries a summary payload.
+    /// Privacy AND preservation audit: all 5 new event types must
+    /// never leak raw body content into the kernel event payload, AND
+    /// large body content routed to the blob store must be preserved
+    /// byte-for-byte. Large PostCompact summary is the highest-risk
+    /// surface.
+    ///
+    /// Fake-test review fix (2026-04-15): the previous version only
+    /// asserted that `meta["compact_summary"]["blob_hash"]` existed
+    /// and `inline` did not. It never read the blob back, so a bug
+    /// where `externalize_or_inline` truncated the body, wrote an
+    /// empty file, or computed a wrong hash would pass silently. The
+    /// fix below resolves the blob hash via `crate::blob::resolve`
+    /// and asserts byte-for-byte equality with the original payload.
     #[test]
     fn lane_b_events_privacy_summary_large_goes_to_blob() {
         let adapter = ClaudeCodeAdapter;
-        // 10 KB of distinctive pattern as a summary. Must go through the
-        // blob store (not inline) and must not appear verbatim in
-        // event.content or any metadata value besides the blob-hash ref.
         let big = "SECRET_COMPACT_SUMMARY_NEEDLE_"
             .chars()
             .cycle()
             .take(10 * 1024)
             .collect::<String>();
-        // Redirect PUNKGO_DATA_DIR to a tempdir so the blob write happens
-        // in an isolated location.
         let _lock = crate::session::PUNKGO_DATA_DIR_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1348,38 +1379,69 @@ mod tests {
         });
         let event = adapter.transform(&raw).unwrap();
 
-        // Restore env var before assertions so a failure doesn't pollute.
-        match prev {
-            Some(v) => std::env::set_var("PUNKGO_DATA_DIR", v),
-            None => std::env::remove_var("PUNKGO_DATA_DIR"),
-        }
-
+        // (1) Shape check: externalized, not inline.
         assert_eq!(event.event_type, "post_compact");
-        // The summary must be in the blob store, not inline.
-        let cs = event.metadata.get("compact_summary").unwrap();
-        assert!(
-            cs.get("blob_hash").is_some(),
-            "large summary should be routed to blob store: {cs}"
-        );
+        let cs = event
+            .metadata
+            .get("compact_summary")
+            .expect("compact_summary key missing");
+        let blob_hash = cs
+            .get("blob_hash")
+            .and_then(Value::as_str)
+            .expect("large summary should be routed to blob store");
         assert!(
             cs.get("inline").is_none(),
             "large summary must NOT be inline"
         );
-        // Double-check: the event.content display label must not contain
-        // the needle (it's a short `Post-compact (auto)` string).
+        // byte_len reported in the metadata envelope must equal the
+        // original payload length — this guards against off-by-one or
+        // partial-write bugs in the helper.
+        let byte_len = cs
+            .get("byte_len")
+            .and_then(Value::as_u64)
+            .expect("byte_len present") as usize;
+        assert_eq!(
+            byte_len,
+            big.len(),
+            "byte_len must equal original summary length"
+        );
+
+        // (2) Preservation check: the blob actually contains the full
+        // original payload byte-for-byte. This is the critical fix:
+        // a hash-ref whose underlying file is empty or truncated would
+        // pass the old shape-only assertions.
+        let resolved = crate::blob::resolve(blob_hash)
+            .expect("blob::resolve should not error")
+            .expect("blob file must exist for the returned hash");
+        assert_eq!(
+            resolved.len(),
+            big.len(),
+            "resolved blob length must match original"
+        );
+        assert_eq!(
+            resolved, big,
+            "resolved blob must equal original summary byte-for-byte"
+        );
+
+        // (3) Leak check: needle must not appear in event.content or
+        // anywhere in serialized metadata besides the blob hash ref
+        // itself (which is a sha256 hex, cannot contain the needle).
         assert!(
             !event.content.contains("SECRET_COMPACT_SUMMARY_NEEDLE_"),
             "needle leaked into event.content"
         );
-        // And serialized metadata (excluding the blob ref object) must not
-        // contain the needle either.
         let serialized = serde_json::to_string(&event.metadata).unwrap();
-        // The blob_hash ref itself is fine (it's a sha256, no needle).
-        // Anywhere ELSE the needle should not appear.
         let needle_count = serialized.matches("SECRET_COMPACT_SUMMARY_NEEDLE_").count();
         assert_eq!(
             needle_count, 0,
             "needle leaked into serialized metadata: {needle_count} occurrences"
         );
+
+        // Restore env var (after assertions — intentional, so a failure
+        // above leaves a debuggable blob file on disk).
+        match prev {
+            Some(v) => std::env::set_var("PUNKGO_DATA_DIR", v),
+            None => std::env::remove_var("PUNKGO_DATA_DIR"),
+        }
     }
 }

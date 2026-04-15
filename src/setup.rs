@@ -150,20 +150,26 @@ pub fn run_setup(tool: &str) -> Result<()> {
     Ok(())
 }
 
-fn setup_claude_code() -> Result<()> {
-    // Resolve absolute path to the current executable so hooks don't depend on PATH.
-    let exe_path =
-        std::env::current_exe().context("failed to determine punkgo-jack executable path")?;
-    // Claude Code runs hooks via /usr/bin/bash — backslashes are interpreted
-    // as escape sequences. Convert to forward slashes on Windows.
-    let exe_str = exe_path.to_string_lossy().replace('\\', "/");
-    let events = hook_events(&exe_str, "claude-code");
+/// Pure hook-installation logic for Claude Code: merge hook commands
+/// into an existing (or new) `settings.json` at `settings_path`. This
+/// function does NOT spawn kerneld, does NOT ping IPC, does NOT touch
+/// the statusline. Returns `(installed_count, skipped_count)`.
+///
+/// Extracted from `setup_claude_code` so tests can drive the same
+/// mutation logic production uses without triggering the IPC
+/// side-effects of a full `run_setup` call. This is the ONE function
+/// the test suite must cover to guarantee the hook-registration
+/// contract; everything else in `setup_claude_code` is orchestration
+/// (kerneld discovery, actor seeding, statusline) whose contracts
+/// live in their own call sites.
+fn install_claude_code_hooks_at_path(
+    exe_str: &str,
+    settings_path: &std::path::Path,
+) -> Result<(usize, usize)> {
+    let events = hook_events(exe_str, "claude-code");
 
-    let settings_path = claude_code_settings_path()?;
-
-    // Read existing settings (or start fresh).
     let mut settings = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)
+        let content = std::fs::read_to_string(settings_path)
             .with_context(|| format!("failed to read {}", settings_path.display()))?;
         serde_json::from_str::<Value>(&content)
             .with_context(|| format!("failed to parse {} as JSON", settings_path.display()))?
@@ -175,7 +181,6 @@ fn setup_claude_code() -> Result<()> {
         .as_object_mut()
         .context("settings.json root must be a JSON object")?;
 
-    // Ensure "hooks" key exists.
     if !settings_obj.contains_key("hooks") {
         settings_obj.insert("hooks".into(), json!({}));
     }
@@ -184,9 +189,8 @@ fn setup_claude_code() -> Result<()> {
         .and_then(Value::as_object_mut)
         .context("settings.json 'hooks' must be a JSON object")?;
 
-    let mut installed = 0;
-    let mut skipped = 0;
-
+    let mut installed = 0usize;
+    let mut skipped = 0usize;
     for (event_name, commands) in &events {
         if merge_hook_entry(hooks, event_name, commands) {
             installed += 1;
@@ -195,18 +199,30 @@ fn setup_claude_code() -> Result<()> {
         }
     }
 
-    // Write back.
     if installed > 0 {
-        // Ensure parent directory exists.
         if let Some(parent) = settings_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
         let content =
             serde_json::to_string_pretty(&settings).context("failed to serialize settings")?;
-        std::fs::write(&settings_path, content.as_bytes())
+        std::fs::write(settings_path, content.as_bytes())
             .with_context(|| format!("failed to write {}", settings_path.display()))?;
     }
+
+    Ok((installed, skipped))
+}
+
+fn setup_claude_code() -> Result<()> {
+    // Resolve absolute path to the current executable so hooks don't depend on PATH.
+    let exe_path =
+        std::env::current_exe().context("failed to determine punkgo-jack executable path")?;
+    // Claude Code runs hooks via /usr/bin/bash — backslashes are interpreted
+    // as escape sequences. Convert to forward slashes on Windows.
+    let exe_str = exe_path.to_string_lossy().replace('\\', "/");
+
+    let settings_path = claude_code_settings_path()?;
+    let (installed, skipped) = install_claude_code_hooks_at_path(&exe_str, &settings_path)?;
 
     if installed > 0 {
         eprintln!(
@@ -1251,12 +1267,74 @@ mod tests {
         assert!(inner[1]["command"].as_str().unwrap().contains("anchor"));
     }
 
-    #[test]
-    fn setup_and_unsetup_round_trip() {
-        let temp = TempDir::new().unwrap();
-        let settings_path = temp.path().join("settings.json");
+    /// RAII helper: acquire the crate-wide env var lock and set HOME to a
+    /// tempdir for the lifetime of the guard. Restores the previous HOME
+    /// value on drop. Used by setup tests so they drive the real
+    /// `run_setup` / `run_unsetup` entrypoints against an isolated
+    /// filesystem instead of hand-rolling the logic in the test body.
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _tmp: TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
 
-        // Write initial settings with some pre-existing config.
+    impl HomeGuard {
+        fn new() -> Self {
+            let lock = crate::session::PUNKGO_DATA_DIR_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let tmp = TempDir::new().unwrap();
+            let prev = std::env::var_os("HOME");
+            std::env::set_var("HOME", tmp.path());
+            Self {
+                _lock: lock,
+                _tmp: tmp,
+                prev,
+            }
+        }
+
+        fn home(&self) -> &std::path::Path {
+            self._tmp.path()
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    /// Real round-trip: drive the REAL hook-install helper +
+    /// `run_unsetup("claude-code", false)` entrypoint against an
+    /// isolated HOME.
+    ///
+    /// Fake-test review fix (2026-04-15): the previous version of this
+    /// test hand-rolled the entire setup and unsetup flow inside the
+    /// test body (read JSON → call `merge_hook_entry` → write JSON →
+    /// manually strip punkgo entries → write again). That proved the
+    /// test's own copy of the logic could mutate a JSON object; it
+    /// did NOT prove the real code paths work end-to-end.
+    ///
+    /// The new test calls `install_claude_code_hooks_at_path` (the
+    /// helper extracted from `setup_claude_code`, used verbatim by
+    /// production) and `run_unsetup("claude-code", false)` (the real
+    /// entrypoint). `run_setup("claude-code")` is NOT called directly
+    /// because its trailing `try_seed_actor` step does an IPC round-
+    /// trip to the dev machine's real kerneld daemon, which pollutes
+    /// the real kernel and can hang if kerneld is slow. The helper
+    /// covers the hook-install contract; kerneld/IPC concerns live
+    /// in their own dedicated modules with their own coverage.
+    #[test]
+    fn setup_and_unsetup_round_trip_via_real_entrypoints() {
+        let guard = HomeGuard::new();
+        let claude_dir = guard.home().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings_path = claude_dir.join("settings.json");
+
+        // Seed a pre-existing user config that must survive the round trip.
         std::fs::write(
             &settings_path,
             serde_json::to_string_pretty(&json!({
@@ -1266,86 +1344,72 @@ mod tests {
         )
         .unwrap();
 
-        // Simulate setup: read, merge, write.
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let mut settings: Value = serde_json::from_str(&content).unwrap();
-        let obj = settings.as_object_mut().unwrap();
-        obj.insert("hooks".into(), json!({}));
-        let hooks = obj["hooks"].as_object_mut().unwrap();
+        // --- REAL install via the production helper ---
+        let exe_str = "/test/bin/punkgo-jack"; // any path; the test
+                                               // asserts on structure, not content
+        let (installed, _skipped) = install_claude_code_hooks_at_path(exe_str, &settings_path)
+            .expect("install_claude_code_hooks_at_path should succeed");
+        assert_eq!(
+            installed, 15,
+            "expected 15 hooks installed, got {installed}"
+        );
 
-        let events = hook_events("punkgo-jack", "claude-code");
-        for (event, cmds) in &events {
-            merge_hook_entry(hooks, event, cmds);
-        }
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&settings).unwrap(),
-        )
-        .unwrap();
-
-        // Verify hooks are present.
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
-        let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 15); // 10 pre-v0.6.0 + 5 Lane B additions
-                                     // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
+        let hooks = settings["hooks"]
+            .as_object()
+            .expect("hooks object must exist after install");
+        assert_eq!(hooks.len(), 15);
+        for expected in [
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "UserPromptSubmit",
+            "SessionStart",
+            "SessionEnd",
+            "Stop",
+            "SubagentStart",
+            "SubagentStop",
+            "Notification",
+            "InstructionsLoaded",
+            "PreCompact",
+            "PostCompact",
+            "StopFailure",
+            "PermissionDenied",
+        ] {
+            assert!(
+                hooks.contains_key(expected),
+                "install must register hook event {expected}"
+            );
+        }
+        // SessionEnd has 2 inner hooks (ingest + anchor).
         let se = hooks["SessionEnd"].as_array().unwrap();
         assert_eq!(se.len(), 1);
         assert_eq!(se[0]["hooks"].as_array().unwrap().len(), 2);
-        // SessionStart has 1 entry with 2 inner hooks (ingest + anchor).
-        let ss = hooks["SessionStart"].as_array().unwrap();
-        assert_eq!(ss.len(), 1);
-        assert_eq!(ss[0]["hooks"].as_array().unwrap().len(), 2);
-        // Pre-existing config preserved.
-        assert!(settings["permissions"]["allow"].is_array());
+        // Pre-existing user permissions must survive.
+        assert_eq!(settings["permissions"]["allow"][0], "Bash");
 
-        // Simulate unsetup: read, remove, write.
-        let mut settings: Value = serde_json::from_str(&content).unwrap();
-        let hooks = settings["hooks"].as_object_mut().unwrap();
+        // --- REAL run_unsetup entrypoint (no IPC side-effects) ---
+        run_unsetup("claude-code", false).expect("run_unsetup should succeed");
 
-        let event_keys: Vec<String> = hooks.keys().cloned().collect();
-        for key in &event_keys {
-            if let Some(entries) = hooks.get_mut(key).and_then(Value::as_array_mut) {
-                entries.retain(|entry| {
-                    !entry
-                        .get("hooks")
-                        .and_then(Value::as_array)
-                        .map(|arr| {
-                            arr.iter().any(|h| {
-                                h.get("command")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(is_punkgo_hook)
-                            })
-                        })
-                        .unwrap_or(false)
-                });
-            }
-        }
-
-        // Clean up empty arrays and hooks key.
-        let empty: Vec<String> = hooks
-            .iter()
-            .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in &empty {
-            hooks.remove(k);
-        }
-        if hooks.is_empty() {
-            settings.as_object_mut().unwrap().remove("hooks");
-        }
-
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&settings).unwrap(),
-        )
-        .unwrap();
-
-        // Verify hooks are removed, other config preserved.
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let settings: Value = serde_json::from_str(&content).unwrap();
-        assert!(settings.get("hooks").is_none());
-        assert!(settings["permissions"]["allow"].is_array());
+        let content_after = std::fs::read_to_string(&settings_path).unwrap();
+        let settings_after: Value = serde_json::from_str(&content_after).unwrap();
+        // `hooks` key may be absent entirely or be an empty object depending
+        // on whether unsetup prunes empty branches.
+        let hooks_after_empty = settings_after
+            .get("hooks")
+            .map(|h| h.as_object().map(|o| o.is_empty()).unwrap_or(false))
+            .unwrap_or(true);
+        assert!(
+            hooks_after_empty,
+            "hooks must be gone or empty after run_unsetup; got: {}",
+            settings_after
+                .get("hooks")
+                .map(|h| h.to_string())
+                .unwrap_or_default()
+        );
+        // Pre-existing user permissions must STILL survive the unsetup.
+        assert_eq!(settings_after["permissions"]["allow"][0], "Bash");
     }
 
     #[test]
@@ -1383,30 +1447,36 @@ mod tests {
         assert!(events[0].1[0].starts_with("/simple/path/punkgo-jack "));
     }
 
+    /// Real cold start: drive `install_claude_code_hooks_at_path` on a
+    /// settings.json that does NOT exist, and assert it creates the
+    /// parent dir, writes the file, and registers all 15 hooks.
+    ///
+    /// Fake-test review fix (2026-04-15): the previous version
+    /// constructed the settings JSON by hand and only verified the
+    /// hand-rolled JSON had 15 keys. It never exercised the REAL path
+    /// resolution or directory-creation logic — a bug where the
+    /// helper failed to create `~/.claude/` on first run would have
+    /// passed. The new test drives the production helper directly.
     #[test]
-    fn setup_creates_settings_from_scratch() {
-        let temp = TempDir::new().unwrap();
-        let settings_path = temp.path().join("settings.json");
+    fn setup_creates_settings_from_scratch_via_real_entrypoint() {
+        let guard = HomeGuard::new();
+        // Intentionally do NOT create ~/.claude/ up front — this test
+        // exercises cold-start directory-creation behavior.
+        let settings_path = guard.home().join(".claude").join("settings.json");
+        assert!(
+            !settings_path.exists(),
+            "precondition: no settings file at start"
+        );
 
-        // No file exists initially.
-        assert!(!settings_path.exists());
+        let exe_str = "/test/bin/punkgo-jack";
+        let (installed, _skipped) = install_claude_code_hooks_at_path(exe_str, &settings_path)
+            .expect("install should succeed cold");
+        assert_eq!(installed, 15);
 
-        let mut settings = json!({});
-        let obj = settings.as_object_mut().unwrap();
-        obj.insert("hooks".into(), json!({}));
-        let hooks = obj["hooks"].as_object_mut().unwrap();
-
-        let events = hook_events("punkgo-jack", "claude-code");
-        for (event, cmds) in &events {
-            merge_hook_entry(hooks, event, cmds);
-        }
-
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&settings).unwrap(),
-        )
-        .unwrap();
-
+        assert!(
+            settings_path.exists(),
+            "install must create ~/.claude/settings.json"
+        );
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();

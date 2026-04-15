@@ -255,52 +255,19 @@ mod tests {
         assert_eq!(page2[0].turn_uuid, "c");
     }
 
-    #[test]
-    fn upsert_turn_no_text_leak() {
-        // Privacy audit: build a turn whose content_blocks_meta records
-        // byte_len=10240 only (the size of a hypothetical body) and assert
-        // that no substring of the original text is in the stored row.
-        let needle = "ULTRASECRET_LEAKCHECK_d7f9c1e3";
-        let mut secret_text = String::new();
-        while secret_text.len() < 10_240 {
-            secret_text.push_str(needle);
-            secret_text.push(' ');
-        }
-        // Build content_blocks_meta the way the indexer will: byte_len only.
-        let meta = serde_json::json!([
-            {
-                "idx": 0,
-                "kind": "text",
-                "byte_len": secret_text.len(),
-                "content_hash": null,
-                "signature_present": false,
-            }
-        ])
-        .to_string();
-
-        let conn = fresh_db();
-        let mut t = make_turn("u-priv", "s-priv", 0);
-        t.content_blocks_meta = meta;
-        upsert_turn(&conn, &t).unwrap();
-
-        // Read back the raw row via SELECT and assert the needle is nowhere
-        // in any text column.
-        let mut stmt = conn
-            .prepare("SELECT content_blocks_meta, cwd, slug, model FROM turns WHERE turn_uuid = ?1")
-            .unwrap();
-        let (cbm, cwd, slug, model): (String, Option<String>, Option<String>, Option<String>) =
-            stmt.query_row(params!["u-priv"], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
-            .unwrap();
-        assert!(
-            !cbm.contains(needle),
-            "PRIVACY VIOLATION: needle leaked into content_blocks_meta"
-        );
-        assert!(cwd.unwrap_or_default().find(needle).is_none());
-        assert!(slug.unwrap_or_default().find(needle).is_none());
-        assert!(model.unwrap_or_default().find(needle).is_none());
-    }
+    // NOTE (2026-04-15 fake-test review): the previous
+    // `upsert_turn_no_text_leak` test lived here and was fake: it built
+    // a pre-sanitized `content_blocks_meta` JSON in the test body,
+    // passed it to `upsert_turn`, and asserted SQLite did not invent
+    // the needle. Of course SQLite did not invent it — the needle was
+    // never passed to the DB in the first place. The real privacy
+    // invariant is "raw jsonl body text never reaches the DB via the
+    // full scanner → indexer → upsert pipeline". That invariant lives
+    // in `indexer::tests::pipeline_no_text_leak_from_user_prompt`
+    // (and the dogfood test) which drive raw jsonl lines through
+    // `run_reindex` end-to-end. This test module only covers the
+    // per-function CRUD plumbing of `upsert_turn` itself; it does not
+    // and cannot prove the pipeline invariant.
 
     #[test]
     fn delete_turns_for_session_clears_rows() {
