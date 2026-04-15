@@ -324,10 +324,26 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<IngestArgs>
     })
 }
 
-/// Lane D: fire-and-forget dispatch to `indexer::scan_on_trigger` for hook
-/// events that signal a turn/session boundary. The async task writes a
-/// `pending_scans` row (durable) and spawns a background drainer. Indexer
-/// errors are logged but never fail the hook.
+/// Lane D dispatch to `indexer::scan_on_trigger` for hook events that
+/// signal a turn/session boundary. Enqueues a durable `pending_scans`
+/// row and drains the queue synchronously, all inside this same thread.
+/// Indexer errors are logged but never fail the hook.
+///
+/// Full-review fix (2026-04-15): the previous implementation wrapped
+/// this work in a detached `std::thread::Builder::spawn(move || ...)`
+/// whose JoinHandle was immediately dropped. In the short-lived
+/// `punkgo-jack ingest` CLI process, `run_inner` returning to `main`
+/// caused process exit, which killed the detached thread mid-drain —
+/// the exact race the `scan_on_trigger` inner P1 fix was supposed to
+/// close. Two layers of fix were required: `scan_on_trigger` drains
+/// synchronously (done in commit 2017a12), AND the caller must block
+/// until `scan_on_trigger` finishes (this commit). We build a
+/// short-lived current-thread tokio runtime directly in the caller's
+/// thread and `block_on` the whole scan. `block_on` does not return
+/// until the drain completes, so `run_inner` cannot exit early.
+/// Drains are tens of milliseconds on SSD — this blocks only the
+/// short-lived ingest process, never the hook exit code (errors are
+/// swallowed to `debug!`).
 fn dispatch_transcript_scan(event_type: &str, session_id: &str, raw_json: &Value) {
     // Session-boundary triggers for Path A transcript scanning.
     //
@@ -352,30 +368,18 @@ fn dispatch_transcript_scan(event_type: &str, session_id: &str, raw_json: &Value
         .map(String::from);
     let session_id = session_id.to_string();
 
-    // We're inside a sync `run_inner` — spawn a short-lived runtime to
-    // call the async enqueue. Building a current-thread runtime is cheap
-    // (~µs) and keeps the indexer module's public API uniformly async.
-    let result = std::thread::Builder::new()
-        .name("punkgo-indexer-dispatch".into())
-        .spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    debug!(error = %e, "indexer dispatch: failed to build runtime");
-                    return;
-                }
-            };
-            if let Err(e) =
-                rt.block_on(crate::indexer::scan_on_trigger(session_id, transcript_path))
-            {
-                debug!(error = %e, "indexer scan_on_trigger returned error");
-            }
-        });
-    if let Err(e) = result {
-        debug!(error = %e, "indexer dispatch: failed to spawn thread");
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            debug!(error = %e, "indexer dispatch: failed to build runtime");
+            return;
+        }
+    };
+    if let Err(e) = rt.block_on(crate::indexer::scan_on_trigger(session_id, transcript_path)) {
+        debug!(error = %e, "indexer scan_on_trigger returned error");
     }
 }
 

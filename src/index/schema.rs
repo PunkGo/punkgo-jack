@@ -24,9 +24,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     permission_mode      TEXT,
     model_initial        TEXT,
 
-    loaded_instructions  TEXT,
-    env_snapshot         TEXT,
-
     total_turns               INTEGER DEFAULT 0,
     total_input_tokens        INTEGER DEFAULT 0,
     total_output_tokens       INTEGER DEFAULT 0,

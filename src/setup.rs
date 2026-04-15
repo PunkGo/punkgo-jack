@@ -90,8 +90,11 @@ fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, Vec<String>)> {
         // same list here is safe for both sources.
         //
         // InstructionsLoaded: a CLAUDE.md / memory / skill file was loaded
-        //   into context at session boot or mid-session refresh. Populates
-        //   sessions.loaded_instructions in the jack index.
+        //   into context at session boot or mid-session refresh. Captured
+        //   as a kernel event (file_path / memory_type / load_reason) for
+        //   audit purposes. Per-session aggregation of loaded instructions
+        //   is not part of v0.6.0 — we surface them in the kernel event
+        //   stream and let downstream consumers aggregate on demand.
         (
             "InstructionsLoaded",
             vec![format!("{exe_cmd} ingest --source {source} --quiet")],

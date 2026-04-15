@@ -23,9 +23,6 @@ pub struct SessionRow {
     pub permission_mode: Option<String>,
     pub model_initial: Option<String>,
 
-    pub loaded_instructions: Option<String>,
-    pub env_snapshot: Option<String>,
-
     pub total_turns: i64,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
@@ -75,7 +72,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<()> {
         INSERT OR REPLACE INTO sessions (
             session_id, source, started_at, ended_at, end_reason, transcript_path,
             cwd_initial, git_branch_initial, git_commit_initial, tool_version, os_info,
-            permission_mode, model_initial, loaded_instructions, env_snapshot,
+            permission_mode, model_initial,
             total_turns, total_input_tokens, total_output_tokens,
             total_cache_read_tokens, total_cache_creation_tokens, total_hidden_tokens_est,
             distinct_model_variants,
@@ -84,12 +81,12 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<()> {
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
             ?7, ?8, ?9, ?10, ?11,
-            ?12, ?13, ?14, ?15,
-            ?16, ?17, ?18,
-            ?19, ?20, ?21,
-            ?22,
-            ?23, ?24, ?25,
-            ?26, ?27, ?28
+            ?12, ?13,
+            ?14, ?15, ?16,
+            ?17, ?18, ?19,
+            ?20,
+            ?21, ?22, ?23,
+            ?24, ?25, ?26
         )
         "#,
         params![
@@ -106,8 +103,6 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<()> {
             session.os_info,
             session.permission_mode,
             session.model_initial,
-            session.loaded_instructions,
-            session.env_snapshot,
             session.total_turns,
             session.total_input_tokens,
             session.total_output_tokens,
@@ -206,8 +201,6 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         os_info: row.get("os_info")?,
         permission_mode: row.get("permission_mode")?,
         model_initial: row.get("model_initial")?,
-        loaded_instructions: row.get("loaded_instructions")?,
-        env_snapshot: row.get("env_snapshot")?,
         total_turns: row.get("total_turns")?,
         total_input_tokens: row.get("total_input_tokens")?,
         total_output_tokens: row.get("total_output_tokens")?,

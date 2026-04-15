@@ -92,10 +92,18 @@ impl HookAdapter for ClaudeCodeAdapter {
             // with empty metadata (never panics on missing keys).
             "InstructionsLoaded" => {
                 let mut meta = build_session_metadata(raw);
-                for key in ["file_path", "memory_type", "load_reason", "source"] {
+                for key in ["file_path", "memory_type", "load_reason"] {
                     if let Some(v) = raw.get(key) {
                         meta.insert(key.into(), v.clone());
                     }
+                }
+                // Claude Code sends a top-level `source` field in the
+                // InstructionsLoaded payload that semantically shadows
+                // the IngestEvent `source` column. Rename it to avoid
+                // confusion for downstream consumers who read
+                // metadata.source expecting "which tool produced this".
+                if let Some(v) = raw.get("source") {
+                    meta.insert("instructions_source".into(), v.clone());
                 }
                 let memory_type = str_field(raw, "memory_type");
                 let file_path = str_field(raw, "file_path");
@@ -185,6 +193,17 @@ impl HookAdapter for ClaudeCodeAdapter {
                 });
             }
             "PermissionDenied" => {
+                // Claude Code's PermissionDenied payload uses short
+                // bounded strings for tool_name / action / reason /
+                // requested_by (tool name ≤ 64 bytes, action label ≤ 128,
+                // reason is a short tag like "user_declined" or "policy").
+                // We intentionally do NOT route these through
+                // externalize_or_inline: the fields are structural, not
+                // user-authored free-text, and blob-store routing would
+                // add noise to the kernel event payload without
+                // preventing any realistic size blowup. If Anthropic
+                // ever extends the schema with a long free-text field,
+                // wrap that field specifically.
                 let mut meta = build_session_metadata(raw);
                 for key in ["tool_name", "action", "reason", "requested_by"] {
                     if let Some(v) = raw.get(key) {

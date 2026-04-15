@@ -94,7 +94,12 @@ pub async fn scan_on_trigger(session_id: String, transcript_path: Option<String>
             .await
             .context("spawn_blocking enqueue join")?;
     if let Err(e) = enqueue_result {
-        tracing::error!(error = %e, session = %session_id, "failed to enqueue pending scan");
+        // `warn!` rather than `error!` so a failed enqueue (disk full,
+        // SQLite lock contention, transient I/O hiccup) does not emit an
+        // ERROR line on the hook's stderr that Claude Code would surface
+        // as a scary red message to the user. The next hook / the next
+        // `reconcile_on_startup` will pick up the scan anyway.
+        tracing::warn!(error = %e, session = %session_id, "failed to enqueue pending scan");
         return Ok(());
     }
 
@@ -129,9 +134,19 @@ pub fn enqueue_pending_scan(session_id: &str, transcript_path: Option<&str>) -> 
 }
 
 /// Maximum retry count for a pending_scans row before it is considered
-/// dead-lettered and skipped on subsequent drains. Rows with attempts >=
-/// this value still sit in the queue for operator review (future v0.6.1
-/// MCP tool will expose them) but are NOT re-attempted automatically.
+/// dead-lettered and skipped on subsequent drains. Rows with
+/// `attempts >= PENDING_SCAN_MAX_ATTEMPTS` remain in the queue as
+/// permanent dead-letter records and are NOT re-attempted automatically.
+/// Operators inspect them via direct SQL:
+///
+///   sqlite3 ~/.punkgo/state/jack/jack.db \
+///     'SELECT id, session_id, transcript_path, attempts, last_error \
+///      FROM pending_scans WHERE attempts >= 3'
+///
+/// The dead-letter rows carry full diagnostic metadata (last_error,
+/// last_attempt, enqueued_at) so the operator can decide whether to
+/// delete, reset attempts to 0 for a manual retry, or leave them
+/// in place.
 const PENDING_SCAN_MAX_ATTEMPTS: i64 = 3;
 
 /// Drain every eligible row in `pending_scans`. Returns the number of
@@ -1395,15 +1410,15 @@ mod tests {
         assert!(numbat >= 1000, "numbat >= 1000 (got {numbat})");
         assert!(opus >= 900, "claude-opus-4-6 >= 900 (got {opus})");
 
-        // Idempotency: re-run produces identical counts.
-        let report2 = run_reindex(ReindexOptions {
-            full: true,
-            ..Default::default()
-        })
-        .unwrap();
-        assert_eq!(report.turns_upserted, report2.turns_upserted);
-        assert_eq!(report.signatures_upserted, report2.signatures_upserted);
-        assert_eq!(report.sessions_upserted, report2.sessions_upserted);
+        // Idempotency against a growing live archive is not checkable:
+        // running this test against `~/.claude/projects/` means *this
+        // very process* is writing new lines to its own jsonl as the
+        // tests execute, so a second reindex sees strictly MORE turns
+        // than the first. Idempotency on static data is already
+        // enforced by `reindex_is_idempotent` on a synthetic archive;
+        // the dogfood test is scoped to "real data produces sensible
+        // floors" and deliberately skips equality assertions across
+        // re-runs.
 
         // Privacy audit: assert known distinctive strings are NOT in the DB.
         // These are English phrases unlikely to appear in any model identifier
