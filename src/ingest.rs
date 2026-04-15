@@ -329,10 +329,12 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<IngestArgs>
 /// `pending_scans` row (durable) and spawns a background drainer. Indexer
 /// errors are logged but never fail the hook.
 fn dispatch_transcript_scan(event_type: &str, session_id: &str, raw_json: &Value) {
-    let triggers = matches!(
-        event_type,
-        "agent_stop" | "subagent_stop" | "session_end" | "stop_failure"
-    );
+    // P2 review fix (2026-04-15): the previous list included "stop_failure"
+    // which is never emitted by any adapter. claude_code.rs maps
+    // PostToolUseFailure to `<tool>_failed` (e.g. `command_execution_failed`),
+    // not to a generic `stop_failure`. Dropping the dead arm so future
+    // maintainers don't assume tool-failure triggers a transcript scan.
+    let triggers = matches!(event_type, "agent_stop" | "subagent_stop" | "session_end");
     if !triggers || session_id == "unknown" {
         return;
     }

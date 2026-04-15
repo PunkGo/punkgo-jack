@@ -648,6 +648,12 @@ pub struct PunkgoSessionListParams {
 #[schemars(deny_unknown_fields)]
 pub struct PunkgoSessionDetailParams {
     pub session_id: String,
+    /// Max turns to return. Defaults to DEFAULT_QUERY_LIMIT, clamped to [1, 500].
+    #[serde(default)]
+    pub turn_limit: Option<u64>,
+    /// Offset into the turn list for cursor-free pagination. Defaults to 0.
+    #[serde(default)]
+    pub turn_offset: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -713,7 +719,23 @@ pub fn punkgo_session_detail(params: PunkgoSessionDetailParams) -> Result<CallTo
                 params.session_id
             )));
         };
-        let turns = crate::index::turns::list_turns_for_session(&conn, &params.session_id)?;
+        let turn_limit = params
+            .turn_limit
+            .unwrap_or(DEFAULT_QUERY_LIMIT)
+            .clamp(1, 500) as usize;
+        let turn_offset = params.turn_offset.unwrap_or(0) as usize;
+        let turns = crate::index::turns::list_turns_for_session(
+            &conn,
+            &params.session_id,
+            turn_limit,
+            turn_offset,
+        )?;
+        let total_turns: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
+            [&params.session_id],
+            |r| r.get(0),
+        )?;
+        let has_more = (turn_offset + turns.len()) < total_turns as usize;
         // Distinct variants seen across this session's signature rows.
         let mut stmt = conn.prepare(
             r#"
@@ -730,6 +752,10 @@ pub fn punkgo_session_detail(params: PunkgoSessionDetailParams) -> Result<CallTo
         Ok(ok_tool_result(json!({
             "session": session,
             "turns": turns,
+            "turn_total": total_turns,
+            "turn_offset": turn_offset,
+            "turn_limit": turn_limit,
+            "has_more": has_more,
             "model_variants_seen": variants,
         })))
     })();

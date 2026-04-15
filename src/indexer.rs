@@ -70,14 +70,25 @@ pub struct ReindexReport {
 // Path A — hook-triggered incremental scan
 // ---------------------------------------------------------------------------
 
-/// Enqueue a pending scan and spawn a detached drainer. Returns immediately;
-/// indexer errors are logged but never propagated to the caller (hooks must
-/// not fail because of the index).
+/// Enqueue a pending scan and drain the queue synchronously. Indexer errors
+/// are logged but never propagated to the caller — hooks must not fail
+/// because of the index.
+///
+/// P1 review fix (2026-04-15): the previous implementation spawned a
+/// detached `tokio::spawn` for the drain. That worked inside the test suite
+/// (long-lived runtime) but silently broke in production: `punkgo-jack
+/// ingest` is a short-lived CLI per hook invocation that blocks on this
+/// function via a current-thread runtime. When the runtime dropped at
+/// function return, the spawned drain task was cancelled before it could
+/// touch the DB. Enqueue was durable (good), but drain only ever ran via
+/// `reconcile_on_startup` on the next daemon restart — meaning recent
+/// sessions never made it to the index between restarts. The fix is to
+/// drain synchronously inside this same invocation. The drain itself is
+/// fast (tens of milliseconds on SSD for a typical incremental scan) and
+/// blocks only the short-lived ingest process, never the hook exit code.
 pub async fn scan_on_trigger(session_id: String, transcript_path: Option<String>) -> Result<()> {
     let sid = session_id.clone();
     let path = transcript_path.clone();
-    // Enqueue synchronously inside spawn_blocking — the row is the durable
-    // checkpoint, so we must be sure it landed before we return.
     let enqueue_result =
         tokio::task::spawn_blocking(move || enqueue_pending_scan(&sid, path.as_deref()))
             .await
@@ -87,23 +98,21 @@ pub async fn scan_on_trigger(session_id: String, transcript_path: Option<String>
         return Ok(());
     }
 
-    // Spawn a detached drainer. The drain itself is best-effort; if it
-    // fails the row sticks around for the next trigger or startup.
-    tokio::spawn(async move {
-        let drain_result = tokio::task::spawn_blocking(drain_pending_scans).await;
-        match drain_result {
-            Ok(Ok(n)) if n > 0 => {
-                debug!(drained = n, "pending_scans drained");
-            }
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => {
-                warn!(error = %e, "pending_scans drain returned error");
-            }
-            Err(e) => {
-                warn!(error = %e, "spawn_blocking drain join failure");
-            }
+    // Drain synchronously. Any error here is swallowed (logged) because
+    // a failed drain just leaves the row in place for the next trigger or
+    // the next `reconcile_on_startup` to retry.
+    match tokio::task::spawn_blocking(drain_pending_scans).await {
+        Ok(Ok(n)) if n > 0 => {
+            debug!(drained = n, session = %session_id, "pending_scans drained");
         }
-    });
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            warn!(error = %e, "pending_scans drain returned error");
+        }
+        Err(e) => {
+            warn!(error = %e, "spawn_blocking drain join failure");
+        }
+    }
 
     Ok(())
 }
@@ -119,9 +128,25 @@ pub fn enqueue_pending_scan(session_id: &str, transcript_path: Option<&str>) -> 
     Ok(())
 }
 
-/// Drain every row in `pending_scans`. Returns the number of rows
-/// successfully processed (deleted). Re-entrant: a second concurrent
+/// Maximum retry count for a pending_scans row before it is considered
+/// dead-lettered and skipped on subsequent drains. Rows with attempts >=
+/// this value still sit in the queue for operator review (future v0.6.1
+/// MCP tool will expose them) but are NOT re-attempted automatically.
+const PENDING_SCAN_MAX_ATTEMPTS: i64 = 3;
+
+/// Drain every eligible row in `pending_scans`. Returns the number of
+/// rows successfully processed (deleted). Re-entrant: a second concurrent
 /// invocation just sees no rows and returns 0.
+///
+/// P1 review fix (2026-04-15): the previous implementation had two
+/// related bugs. (1) `SELECT ... ORDER BY id ASC LIMIT 1` without an
+/// attempts filter would keep re-picking a permanently broken head row,
+/// never making progress on newer queued rows behind it. (2) On failure
+/// the loop broke out entirely, so even a transient failure starved
+/// everything after it. The fix: filter out rows that have already hit
+/// the retry ceiling via `WHERE attempts < ?`, and on per-row failure
+/// `continue` to the next eligible row instead of `break`. Dead-lettered
+/// rows (attempts >= MAX) stay in the table for diagnosis.
 pub fn drain_pending_scans() -> Result<usize> {
     let mut conn = index::open_jack_db()?;
     let mut processed = 0usize;
@@ -129,8 +154,9 @@ pub fn drain_pending_scans() -> Result<usize> {
     loop {
         let next: Option<(i64, String, Option<String>, i64)> = conn
             .query_row(
-                "SELECT id, session_id, transcript_path, attempts FROM pending_scans ORDER BY id ASC LIMIT 1",
-                [],
+                "SELECT id, session_id, transcript_path, attempts FROM pending_scans \
+                 WHERE attempts < ?1 ORDER BY id ASC LIMIT 1",
+                params![PENDING_SCAN_MAX_ATTEMPTS],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()
@@ -148,12 +174,12 @@ pub fn drain_pending_scans() -> Result<usize> {
             Err(e) => {
                 let attempts_after = attempts + 1;
                 let level_text = e.to_string();
-                if attempts_after >= 3 {
+                if attempts_after >= PENDING_SCAN_MAX_ATTEMPTS {
                     tracing::error!(
                         error = %e,
                         session = %session_id,
                         attempts = attempts_after,
-                        "pending_scans entry exceeded retry limit"
+                        "pending_scans entry dead-lettered after exceeding retry limit"
                     );
                 } else {
                     warn!(
@@ -167,9 +193,12 @@ pub fn drain_pending_scans() -> Result<usize> {
                     "UPDATE pending_scans SET attempts = ?1, last_error = ?2, last_attempt = ?3 WHERE id = ?4",
                     params![attempts_after, level_text, now_iso(), id],
                 )?;
-                // Stop draining on first failure to avoid hot-looping on a
-                // permanently broken row. Next trigger will retry.
-                break;
+                // After the attempts bump, if the row hit the ceiling it
+                // will be filtered out by the next SELECT's WHERE clause.
+                // Otherwise the next iteration retries it. Either way we
+                // `continue` so other queued rows are not starved by this
+                // failure.
+                continue;
             }
         }
     }
@@ -217,9 +246,82 @@ fn process_pending_scan(
     }
 
     sessions::update_scan_offset(&tx, session_id, new_offset, None)?;
+
+    // P1 review fix (2026-04-15): after incremental upsert, recompute
+    // session aggregates from the DB and finalize. Previously Path A
+    // skipped this entirely, leaving sessions.total_turns /
+    // total_hidden_tokens_est / distinct_model_variants at 0 until a
+    // subsequent `reindex --full` ran. The aggregate SQL runs on the
+    // same transaction so a rollback undoes both the turns and the
+    // finalize if anything downstream fails.
+    let agg = compute_aggregates_from_db(&tx, session_id)?;
+    sessions::finalize_session(&tx, session_id, &agg)?;
+
     tx.commit()?;
 
     Ok(())
+}
+
+/// Recompute session-level aggregates by SELECTing all turns for the
+/// session. Used by Path A (incremental) so finalize_session sees the
+/// full picture, not just the delta from the latest scan. Path B
+/// (full reindex) uses the in-memory `compute_aggregates` variant for
+/// speed since it already has all records loaded.
+fn compute_aggregates_from_db(conn: &Connection, session_id: &str) -> Result<SessionAggregates> {
+    let (
+        total_turns,
+        total_input,
+        total_output,
+        total_cache_read,
+        total_cache_creation,
+        total_hidden,
+    ): (i64, i64, i64, i64, i64, i64) = conn.query_row(
+        r#"SELECT
+                COUNT(*),
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
+                COALESCE(SUM(estimated_hidden_tokens), 0)
+            FROM turns WHERE session_id = ?1"#,
+        params![session_id],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        },
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT model_variant FROM turns \
+         WHERE session_id = ?1 AND model_variant IS NOT NULL ORDER BY model_variant",
+    )?;
+    let variants: Vec<String> = stmt
+        .query_map(params![session_id], |r| r.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    let distinct_json = if variants.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&variants).unwrap_or_default())
+    };
+
+    Ok(SessionAggregates {
+        ended_at: None,
+        end_reason: None,
+        total_turns,
+        total_input_tokens: total_input,
+        total_output_tokens: total_output,
+        total_cache_read_tokens: total_cache_read,
+        total_cache_creation_tokens: total_cache_creation,
+        total_hidden_tokens_est: total_hidden,
+        distinct_model_variants: distinct_json,
+    })
 }
 
 fn next_turn_order(conn: &Connection, session_id: &str) -> Result<i64> {
@@ -273,13 +375,10 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
         files.retain(|p| p.file_stem().and_then(|s| s.to_str()) == Some(target_session.as_str()));
     }
 
-    let mut conn = if opts.dry_run {
-        // In dry-run we still need a connection for read/lookups, but we'll
-        // wrap every write in a rollback. Open a real conn and never commit.
-        index::open_jack_db()?
-    } else {
-        index::open_jack_db()?
-    };
+    // NIT review fix (2026-04-15): both arms were identical — collapsed.
+    // In dry-run mode we still open a real connection for schema init and
+    // lookups, but never commit a write transaction.
+    let mut conn = index::open_jack_db()?;
 
     let total = files.len();
     info!(file_count = total, "reindex starting");
@@ -590,15 +689,17 @@ fn build_content_blocks_meta(record: &TurnRecord) -> String {
                 "is_error": is_error,
                 "signature_present": false,
             }),
+            // P2 review fix: drop `signature_bytes` (already stored in
+            // thinking_signatures.signature_bytes — no loss) and add
+            // explicit `content_hash: null` so every block kind has the
+            // same shape. Downstream parsers rely on field-set uniformity.
             ContentBlockRecord::Thinking {
-                thinking_byte_len,
-                signature_bytes,
-                ..
+                thinking_byte_len, ..
             } => json!({
                 "idx": idx,
                 "kind": "thinking",
                 "byte_len": thinking_byte_len,
-                "signature_bytes": signature_bytes,
+                "content_hash": serde_json::Value::Null,
                 "signature_present": true,
             }),
         })
@@ -918,6 +1019,11 @@ mod tests {
 
     #[test]
     fn drain_pending_scans_retries_on_failure() {
+        // P1 review fix (2026-04-15): drain now uses `continue` on failure
+        // instead of `break`, and the SELECT filters `WHERE attempts < MAX`.
+        // This test verifies both: (1) a broken row is retried up to
+        // PENDING_SCAN_MAX_ATTEMPTS times within a single drain call, (2)
+        // once the ceiling is reached it stops being re-selected.
         let _guard = DataDirGuard::new();
         enqueue_pending_scan("sess-missing", Some("/no/such/file.jsonl")).unwrap();
 
@@ -932,7 +1038,43 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(attempts, 1);
+        assert_eq!(
+            attempts, PENDING_SCAN_MAX_ATTEMPTS,
+            "row should be retried until it hits the ceiling"
+        );
+
+        // Second drain must be a no-op: the row is dead-lettered and the
+        // WHERE filter excludes it. Row stays in the table for diagnosis.
+        let processed2 = drain_pending_scans().unwrap();
+        assert_eq!(processed2, 0);
+        let row_still_there: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pending_scans WHERE session_id = 'sess-missing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(row_still_there, 1, "dead-lettered row stays for diagnosis");
+
+        // A fresh healthy row enqueued behind the dead one must NOT be
+        // starved — this is the whole point of the P1 #2 fix.
+        // We can't easily make a row that succeeds in this test setup (it
+        // would require a real transcript file), so we just assert that a
+        // second enqueue of the same sess-missing (with attempts reset to 0
+        // via a new row id) progresses at least one iteration.
+        enqueue_pending_scan("sess-behind", Some("/also/missing.jsonl")).unwrap();
+        let _ = drain_pending_scans().unwrap(); // drains, both eventually dead-letter
+        let count_behind: i64 = conn
+            .query_row(
+                "SELECT attempts FROM pending_scans WHERE session_id = 'sess-behind'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            count_behind >= 1,
+            "behind row must be attempted at least once (was {count_behind})"
+        );
     }
 
     #[test]

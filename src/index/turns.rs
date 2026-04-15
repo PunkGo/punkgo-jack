@@ -161,11 +161,28 @@ pub fn get_turn(conn: &Connection, turn_uuid: &str) -> Result<Option<TurnRow>> {
     Ok(row)
 }
 
-pub fn list_turns_for_session(conn: &Connection, session_id: &str) -> Result<Vec<TurnRow>> {
-    let mut stmt =
-        conn.prepare("SELECT * FROM turns WHERE session_id = ?1 ORDER BY turn_order ASC")?;
+/// List turns for a session, ordered by turn_order ASC. Bounded by
+/// `limit` + `offset` to protect against memory blow-up on long sessions.
+///
+/// P2 review fix (2026-04-15): the previous unbounded variant was a DoS
+/// surface — a MCP caller invoking `punkgo_session_detail` on a long
+/// session could force the handler to materialize every turn in memory.
+/// Callers that truly want all turns must loop with advancing offset.
+pub fn list_turns_for_session(
+    conn: &Connection,
+    session_id: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<TurnRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM turns WHERE session_id = ?1 \
+         ORDER BY turn_order ASC LIMIT ?2 OFFSET ?3",
+    )?;
     let rows = stmt
-        .query_map(params![session_id], row_to_turn)?
+        .query_map(
+            params![session_id, limit as i64, offset as i64],
+            row_to_turn,
+        )?
         .map(|r| r.map_err(anyhow::Error::from))
         .collect::<Result<Vec<_>>>()?;
     Ok(rows)
@@ -225,9 +242,17 @@ mod tests {
         upsert_turn(&conn, &make_turn("a", "s", 0)).unwrap();
         upsert_turn(&conn, &make_turn("b", "s", 1)).unwrap();
 
-        let listed = list_turns_for_session(&conn, "s").unwrap();
+        let listed = list_turns_for_session(&conn, "s", 100, 0).unwrap();
         let order: Vec<_> = listed.iter().map(|t| t.turn_uuid.clone()).collect();
         assert_eq!(order, vec!["a", "b", "c"]);
+
+        // Verify limit + offset slicing.
+        let page1 = list_turns_for_session(&conn, "s", 2, 0).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].turn_uuid, "a");
+        let page2 = list_turns_for_session(&conn, "s", 2, 2).unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].turn_uuid, "c");
     }
 
     #[test]
@@ -284,6 +309,8 @@ mod tests {
         upsert_turn(&conn, &make_turn("b", "s", 1)).unwrap();
         let n = delete_turns_for_session(&conn, "s").unwrap();
         assert_eq!(n, 2);
-        assert!(list_turns_for_session(&conn, "s").unwrap().is_empty());
+        assert!(list_turns_for_session(&conn, "s", 100, 0)
+            .unwrap()
+            .is_empty());
     }
 }
