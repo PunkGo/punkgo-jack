@@ -230,8 +230,24 @@ mod tests {
 
     #[test]
     fn default_state_dir_under_punkgo() {
+        // Acquire the shared lock so we don't race with any test that mutates
+        // PUNKGO_DATA_DIR (e.g. claude_code::tests::truncation::*).
+        let _guard = crate::session::PUNKGO_DATA_DIR_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // If a prior test leaked the env var (shouldn't happen, but defensive),
+        // clear it so this test sees the default behavior.
+        let prev = std::env::var_os("PUNKGO_DATA_DIR");
+        std::env::remove_var("PUNKGO_DATA_DIR");
+
         let dir = default_state_dir().unwrap();
         let dir_str = dir.to_string_lossy();
+
+        // Restore before assertions so a failure doesn't leave env polluted.
+        if let Some(v) = prev {
+            std::env::set_var("PUNKGO_DATA_DIR", v);
+        }
+
         assert!(
             dir_str.contains(".punkgo"),
             "expected .punkgo in path, got: {dir_str}"

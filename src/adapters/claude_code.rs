@@ -29,10 +29,14 @@ impl HookAdapter for ClaudeCodeAdapter {
             "Stop" => {
                 let mut meta = build_session_metadata(raw);
                 if let Some(v) = raw.get("last_assistant_message") {
-                    meta.insert(
-                        "last_assistant_message".into(),
-                        json!(truncate(v.as_str().unwrap_or(""), 500)),
-                    );
+                    let text = v.as_str().unwrap_or("");
+                    let value = crate::blob::externalize_or_inline(
+                        "last_assistant_message",
+                        text,
+                        max_inline_bytes(),
+                    )
+                    .unwrap_or_else(|_| json!({ "inline": text }));
+                    meta.insert("last_assistant_message".into(), value);
                 }
                 return Ok(IngestEvent {
                     actor_id: "claude-code".into(),
@@ -83,18 +87,35 @@ impl HookAdapter for ClaudeCodeAdapter {
                 });
             }
             "UserPromptSubmit" => {
-                let meta = build_prompt_metadata(raw);
+                let mut meta = build_prompt_metadata(raw);
                 let image_count = meta.get("image_count").and_then(Value::as_u64).unwrap_or(0);
-                let prompt_text = truncate(str_field(raw, "prompt"), 200);
+                let full_prompt = str_field(raw, "prompt");
+
+                // Full prompt always preserved in metadata via externalize_or_inline.
+                // Small prompts stay inline, large prompts go to blob store —
+                // no byte limit at adapter layer.
+                if !full_prompt.is_empty() {
+                    let value = crate::blob::externalize_or_inline(
+                        "prompt_body",
+                        full_prompt,
+                        max_inline_bytes(),
+                    )
+                    .unwrap_or_else(|_| json!({ "inline": full_prompt }));
+                    meta.insert("prompt_body".into(), value);
+                }
+
+                // Display label: short human preview (≤200 chars) of the prompt.
+                // This is the UI `event.content` string, NOT the data store.
+                let display_preview = display_preview(full_prompt, 200);
                 let content = if image_count > 0 {
                     format!(
                         "User prompt (+{} image{}): {}",
                         image_count,
                         if image_count > 1 { "s" } else { "" },
-                        prompt_text
+                        display_preview
                     )
                 } else {
-                    format!("User prompt: {}", prompt_text)
+                    format!("User prompt: {}", display_preview)
                 };
                 return Ok(IngestEvent {
                     actor_id: "claude-code".into(),
@@ -166,10 +187,10 @@ fn derive_target(tool_name: &str, tool_input: &Value) -> String {
 
 fn derive_content(tool_name: &str, tool_input: &Value) -> String {
     match tool_name {
-        "Bash" => format!(
-            "Execute command: {}",
-            truncate(str_field(tool_input, "command"), 200)
-        ),
+        // No byte limit — the command is already durably stored intact in
+        // meta["tool_input"]["command"] (NEVER_EXTERNALIZE). Display the full
+        // command here; downstream UIs can clamp at render time.
+        "Bash" => format!("Execute command: {}", str_field(tool_input, "command")),
         "Write" => format!("Write file: {}", str_field(tool_input, "file_path")),
         "Edit" => format!("Edit file: {}", str_field(tool_input, "file_path")),
         "Read" => format!("Read file: {}", str_field(tool_input, "file_path")),
@@ -184,6 +205,24 @@ fn derive_content(tool_name: &str, tool_input: &Value) -> String {
 
 fn capture_response_mode() -> String {
     std::env::var("PUNKGO_CAPTURE_RESPONSE").unwrap_or_else(|_| "summary".to_string())
+}
+
+/// Max bytes for a content field to stay inline before being offloaded to the
+/// blob store. Adapter call sites for the 3 legacy truncation points
+/// (prompt, last_assistant_message, bash command display) read this instead
+/// of hardcoding a limit. Default 4096; override via env for emergencies.
+fn max_inline_bytes() -> usize {
+    std::env::var("PUNKGO_MAX_INLINE_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4096)
+}
+
+/// Display-only preview: truncate-to-char-boundary for the UI `event.content`
+/// label. Loses bytes by design — the full value is stored in metadata via
+/// `externalize_or_inline`. Never use this for data storage.
+fn display_preview(s: &str, max: usize) -> &str {
+    truncate(s, max)
 }
 
 fn build_metadata(raw: &Value) -> BTreeMap<String, Value> {
@@ -717,6 +756,302 @@ mod tests {
         let event = adapter.transform(&raw).unwrap();
         assert_eq!(event.event_type, "subagent_stop");
         assert_eq!(event.target, "subagent:code-reviewer");
+    }
+
+    // ------------------------------------------------------------------
+    // Regression tests for v0.6.0 truncation removal (IRON RULE §6.4).
+    // Three mandatory cases — no skipping.
+    // ------------------------------------------------------------------
+
+    mod truncation {
+        use super::super::*;
+        use serde_json::{json, Value};
+
+        /// Per-test scoped PUNKGO_DATA_DIR. Sets the env var for the lifetime
+        /// of the TempDir, enabling externalize() filesystem writes. Tests
+        /// that run in parallel within the same process share process env,
+        /// so we serialize on the crate-wide `session::PUNKGO_DATA_DIR_LOCK`
+        /// which is also acquired by any other test that reads the env var.
+        fn with_temp_data_dir<F, R>(f: F) -> R
+        where
+            F: FnOnce() -> R,
+        {
+            let _guard = crate::session::PUNKGO_DATA_DIR_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let tmp = tempfile::TempDir::new().expect("tempdir");
+            let prev = std::env::var_os("PUNKGO_DATA_DIR");
+            std::env::set_var("PUNKGO_DATA_DIR", tmp.path());
+            let result = f();
+            match prev {
+                Some(v) => std::env::set_var("PUNKGO_DATA_DIR", v),
+                None => std::env::remove_var("PUNKGO_DATA_DIR"),
+            }
+            result
+        }
+
+        /// Resolve a `{"inline": ...}` or `{"blob_hash": ..., ...}` value back
+        /// to its original content. For blob refs, reads from the blob store.
+        fn resolve_externalized(value: &Value) -> String {
+            if let Some(inline) = value.get("inline").and_then(Value::as_str) {
+                return inline.to_string();
+            }
+            if let Some(hash_ref) = value.get("blob_hash").and_then(Value::as_str) {
+                let hex = hash_ref.strip_prefix("sha256:").unwrap_or(hash_ref);
+                let path = crate::blob::blob_dir().unwrap().join(hex);
+                return std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("blob read {}: {e}", path.display()));
+            }
+            panic!("value is neither inline nor blob_hash: {value}");
+        }
+
+        fn distinctive_pattern(len: usize) -> String {
+            (0..len).map(|i| (b'a' + (i % 26) as u8) as char).collect()
+        }
+
+        #[test]
+        fn large_prompt_preserved_in_metadata() {
+            with_temp_data_dir(|| {
+                let prompt = distinctive_pattern(10_240);
+                assert_eq!(prompt.len(), 10_240);
+
+                let adapter = ClaudeCodeAdapter;
+                let raw = json!({
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "ses_large",
+                    "cwd": "/tmp",
+                    "prompt": prompt.clone()
+                });
+                let event = adapter.transform(&raw).unwrap();
+
+                // prompt_body is the durable data store. Must round-trip
+                // byte-for-byte regardless of inline vs blob path.
+                let stored = event
+                    .metadata
+                    .get("prompt_body")
+                    .expect("prompt_body must be in metadata");
+                let recovered = resolve_externalized(stored);
+                assert_eq!(
+                    recovered.len(),
+                    prompt.len(),
+                    "length mismatch after round-trip"
+                );
+                assert_eq!(recovered, prompt, "byte-for-byte preservation failed");
+
+                // The display label is allowed to be short — it's UI-only.
+                assert!(event.content.starts_with("User prompt: "));
+            });
+        }
+
+        #[test]
+        fn large_assistant_message_preserved_in_metadata() {
+            with_temp_data_dir(|| {
+                let msg = distinctive_pattern(10_240);
+                assert_eq!(msg.len(), 10_240);
+
+                let adapter = ClaudeCodeAdapter;
+                let raw = json!({
+                    "hook_event_name": "Stop",
+                    "session_id": "ses_large_stop",
+                    "last_assistant_message": msg.clone()
+                });
+                let event = adapter.transform(&raw).unwrap();
+
+                let stored = event
+                    .metadata
+                    .get("last_assistant_message")
+                    .expect("last_assistant_message must be in metadata");
+                let recovered = resolve_externalized(stored);
+                assert_eq!(
+                    recovered.len(),
+                    msg.len(),
+                    "length mismatch after round-trip"
+                );
+                assert_eq!(recovered, msg, "byte-for-byte preservation failed");
+            });
+        }
+
+        /// For each of the 10 pre-existing hook event names, run the adapter
+        /// with SMALL inputs (< 1 KB) and assert the v0.5.4-compatible
+        /// event shape and metadata keys are unchanged by the truncation-
+        /// removal work. Purpose: guarantee we didn't break the small-input
+        /// happy path.
+        #[test]
+        fn existing_hook_paths_identical_to_v054() {
+            with_temp_data_dir(|| {
+                let adapter = ClaudeCodeAdapter;
+                let small_prompt = "Fix the login bug";
+                let small_msg = "Done! All tests pass.";
+
+                struct Case {
+                    hook: &'static str,
+                    raw: Value,
+                    expected_event_type: &'static str,
+                    expected_target: &'static str,
+                }
+
+                let cases = vec![
+                    Case {
+                        hook: "SessionStart",
+                        raw: json!({
+                            "hook_event_name": "SessionStart",
+                            "session_id": "ses_01",
+                            "cwd": "/p"
+                        }),
+                        expected_event_type: "session_start",
+                        expected_target: "session:SessionStart",
+                    },
+                    Case {
+                        hook: "SessionEnd",
+                        raw: json!({
+                            "hook_event_name": "SessionEnd",
+                            "session_id": "ses_01",
+                            "cwd": "/p"
+                        }),
+                        expected_event_type: "session_end",
+                        expected_target: "session:SessionEnd",
+                    },
+                    Case {
+                        hook: "Stop",
+                        raw: json!({
+                            "hook_event_name": "Stop",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "last_assistant_message": small_msg
+                        }),
+                        expected_event_type: "agent_stop",
+                        expected_target: "session:Stop",
+                    },
+                    Case {
+                        hook: "SubagentStart",
+                        raw: json!({
+                            "hook_event_name": "SubagentStart",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "agent_type": "code-reviewer"
+                        }),
+                        expected_event_type: "subagent_start",
+                        expected_target: "subagent:code-reviewer",
+                    },
+                    Case {
+                        hook: "SubagentStop",
+                        raw: json!({
+                            "hook_event_name": "SubagentStop",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "agent_type": "code-reviewer"
+                        }),
+                        expected_event_type: "subagent_stop",
+                        expected_target: "subagent:code-reviewer",
+                    },
+                    Case {
+                        hook: "Notification",
+                        raw: json!({
+                            "hook_event_name": "Notification",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "notification_type": "permission_prompt",
+                            "message": "Allow?",
+                            "title": "Permission"
+                        }),
+                        expected_event_type: "notification",
+                        expected_target: "notification:permission_prompt",
+                    },
+                    Case {
+                        hook: "UserPromptSubmit",
+                        raw: json!({
+                            "hook_event_name": "UserPromptSubmit",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "prompt": small_prompt
+                        }),
+                        expected_event_type: "user_prompt",
+                        expected_target: "user:prompt",
+                    },
+                    Case {
+                        hook: "PreToolUse",
+                        raw: json!({
+                            "hook_event_name": "PreToolUse",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "tool_name": "Bash",
+                            "tool_input": { "command": "ls" }
+                        }),
+                        expected_event_type: "command_execution_pre",
+                        expected_target: "bash:ls",
+                    },
+                    Case {
+                        hook: "PostToolUse",
+                        raw: json!({
+                            "hook_event_name": "PostToolUse",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "tool_name": "Bash",
+                            "tool_input": { "command": "ls" }
+                        }),
+                        expected_event_type: "command_execution",
+                        expected_target: "bash:ls",
+                    },
+                    Case {
+                        hook: "PostToolUseFailure",
+                        raw: json!({
+                            "hook_event_name": "PostToolUseFailure",
+                            "session_id": "ses_01",
+                            "cwd": "/p",
+                            "tool_name": "Bash",
+                            "tool_input": { "command": "ls" }
+                        }),
+                        expected_event_type: "command_execution_failed",
+                        expected_target: "bash:ls",
+                    },
+                ];
+
+                for case in &cases {
+                    let event = adapter.transform(&case.raw).unwrap_or_else(|e| {
+                        panic!("hook {} failed: {e}", case.hook);
+                    });
+                    assert_eq!(
+                        event.event_type, case.expected_event_type,
+                        "hook {} event_type",
+                        case.hook
+                    );
+                    assert_eq!(
+                        event.target, case.expected_target,
+                        "hook {} target",
+                        case.hook
+                    );
+                    assert_eq!(event.actor_id, "claude-code", "hook {} actor_id", case.hook);
+                    assert_eq!(event.source, "claude-code", "hook {} source", case.hook);
+                    assert_eq!(
+                        event.metadata.get("session_id"),
+                        Some(&json!("ses_01")),
+                        "hook {} metadata.session_id",
+                        case.hook
+                    );
+                    assert_eq!(
+                        event.metadata.get("cwd"),
+                        Some(&json!("/p")),
+                        "hook {} metadata.cwd",
+                        case.hook
+                    );
+                    // hook_event is the v0.5.4 compat key (renamed from hook_event_name).
+                    // Session-style events (SessionStart/End/Stop/Subagent*/Notification/
+                    // UserPromptSubmit) store the raw name under "hook_event_name";
+                    // tool-use events store it under "hook_event". Assert either form.
+                    let hook_name_ok = event
+                        .metadata
+                        .get("hook_event")
+                        .or_else(|| event.metadata.get("hook_event_name"))
+                        .and_then(Value::as_str)
+                        == Some(case.hook);
+                    assert!(
+                        hook_name_ok,
+                        "hook {} missing hook_event metadata key",
+                        case.hook
+                    );
+                }
+            });
+        }
     }
 
     #[test]

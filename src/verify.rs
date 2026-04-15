@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn hex_to_tlog_hash_wrong_length_fails() {
         let hex_str = "aabb"; // only 2 bytes
-        assert!(hex_to_tlog_hash(&hex_str).is_err());
+        assert!(hex_to_tlog_hash(hex_str).is_err());
     }
 
     // --- maxpow2 ---

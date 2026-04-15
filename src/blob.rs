@@ -76,6 +76,38 @@ pub(crate) fn resolve(hash_ref: &str) -> Result<Option<String>> {
     Ok(Some(content))
 }
 
+/// Returns either the inline content or a blob-hash reference, depending on
+/// whether the byte length exceeds `max_inline`. Unlike the older
+/// `externalize_tool_input`, this helper never truncates and never silently
+/// drops data: ≤ max_inline → inline, > max_inline → blob store.
+///
+/// Returned shape (serde_json::Value):
+///   inline:    { "inline": "<content>" }
+///   blob ref:  { "blob_hash": "sha256:<hex>", "byte_len": N, "field": "<field_name>" }
+///
+/// Adapter sites use this for the 3 legacy truncation points
+/// (prompt, last_assistant_message, bash command display).
+pub fn externalize_or_inline(field_name: &str, content: &str, max_inline: usize) -> Result<Value> {
+    if content.len() <= max_inline {
+        return Ok(serde_json::json!({ "inline": content }));
+    }
+
+    // Above inline threshold → push to content-addressed blob store.
+    // `externalize` uses its own internal EXTERNALIZE_THRESHOLD (1 KB) which is
+    // always ≤ 4 KB, so any content above max_inline (≥ 4 KB) will externalize.
+    // We still handle the None fallback defensively in case thresholds are
+    // reconfigured in the future.
+    let byte_len = content.len();
+    match externalize(content)? {
+        Some(hash_ref) => Ok(serde_json::json!({
+            "blob_hash": hash_ref,
+            "byte_len": byte_len,
+            "field": field_name,
+        })),
+        None => Ok(serde_json::json!({ "inline": content })),
+    }
+}
+
 /// Process a serde_json::Value, externalizing any string field that exceeds the threshold.
 /// Returns the (possibly modified) value and a list of hash references.
 ///

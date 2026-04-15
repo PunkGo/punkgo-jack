@@ -22,6 +22,12 @@ mod tools;
 mod tsa_verify;
 mod upgrade;
 mod verify;
+// Lane C v0.6.0: transcript + signature modules (temporarily registered here
+// until main session wires them into the proper module tree).
+#[allow(dead_code)]
+mod signature;
+#[allow(dead_code)]
+mod transcript;
 
 use std::env;
 

@@ -39,6 +39,8 @@ cms = "0.2"
 der = { version = "0.7", features = ["derive", "oid"] }
 spki = "0.7"
 const-oid = "0.9"
+regex = "1"
+once_cell = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"], optional = true }
 resvg = { version = "0.47", optional = true }
 usvg = { version = "0.47", optional = true }

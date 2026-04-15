@@ -154,6 +154,12 @@ fn session_file_path(claude_session_id: &str) -> Result<PathBuf> {
     Ok(dir.join(format!("{claude_session_id}.json")))
 }
 
+/// Shared test-only lock for any test that mutates `PUNKGO_DATA_DIR`.
+/// Tests reading `punkgo_data_dir()` must acquire this too, since cargo test
+/// runs multithreaded and env vars are process-global.
+#[cfg(test)]
+pub(crate) static PUNKGO_DATA_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn punkgo_data_dir() -> Result<PathBuf> {
     // Allow override via PUNKGO_DATA_DIR (useful for testing and custom deployments).
     if let Some(dir) = std::env::var_os("PUNKGO_DATA_DIR") {

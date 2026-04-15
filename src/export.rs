@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn format_markdown_basic() {
-        let events = vec![
+        let events = [
             json!({
                 "id": "evt_001",
                 "log_index": 0,
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn format_json_structure() {
-        let events = vec![json!({
+        let events = [json!({
             "id": "evt_001",
             "log_index": 0,
             "action_type": "observe",
