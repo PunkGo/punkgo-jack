@@ -9,6 +9,8 @@ mod daemon;
 mod data_fetch;
 mod export;
 mod history;
+mod index;
+mod indexer;
 mod ingest;
 mod ipc_client;
 mod mcp;
@@ -22,11 +24,9 @@ mod tools;
 mod tsa_verify;
 mod upgrade;
 mod verify;
-// Lane C v0.6.0: transcript + signature modules (temporarily registered here
-// until main session wires them into the proper module tree).
-#[allow(dead_code)]
+// Lane C v0.6.0: transcript + signature modules. Consumed by Lane D
+// (indexer.rs / index/ / tools.rs).
 mod signature;
-#[allow(dead_code)]
 mod transcript;
 
 use std::env;
@@ -68,6 +68,7 @@ fn print_usage() {
          \x20 verify-tsr <TREE_SIZE>  Verify a stored TSA timestamp token\n\
          \x20 upgrade                 Check for updates and upgrade\n\
          \x20 flush                   Replay spillover events to kernel\n\
+         \x20 reindex [OPTIONS]      Backfill jack transcript index from ~/.claude/projects/\n\
          \x20 rebuild-audit           Rebuild Merkle tree from event hashes\n\
          \x20 help                    Show this message\n\
          \n\
@@ -80,6 +81,12 @@ fn print_usage() {
          \n\
          Query options (history, presence, export):\n\
          \x20 --actor <ID>            Filter by actor (e.g. claude-code, cursor). Default: all\n\
+         \n\
+         Reindex options:\n\
+         \x20 --full                  Re-scan every transcript file\n\
+         \x20 --since <TS>            Only files with mtime >= ISO 8601 timestamp\n\
+         \x20 --session <ID>          Only this session's transcript\n\
+         \x20 --dry-run               Parse and report counts, do not write\n\
          \n\
          Ingest options:\n\
          \x20 --source <NAME>         Data source (claude-code, cursor)\n\
@@ -128,6 +135,7 @@ fn main() {
         "verify-tsr" => verify::run_verify_tsr(&mut args),
         "upgrade" => upgrade::run_upgrade(),
         "flush" => spillover::flush(),
+        "reindex" => run_reindex(&mut args),
         #[cfg(feature = "rebuild-audit")]
         "rebuild-audit" => run_rebuild_audit(&mut args),
         "help" | "-h" | "--help" => {
@@ -151,11 +159,78 @@ fn main() {
 fn run_serve() -> Result<()> {
     let backend = backend::backend_from_env()?;
     info!("daemon backend initialized");
+
+    // Path C: reconcile any leftover pending_scans from prior runs and
+    // re-enqueue drifted sessions. Failures are non-fatal; the daemon
+    // must come up even if the index is broken.
+    if let Err(e) = indexer::reconcile_on_startup() {
+        tracing::warn!(error = %e, "indexer reconcile_on_startup failed (non-fatal)");
+    }
+    maybe_print_first_run_hint();
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build tokio runtime for punkgo-jack server")?;
     runtime.block_on(mcp::run_stdio(backend))
+}
+
+/// On first launch (sessions table empty), nudge the user to backfill.
+/// Non-blocking — just one stderr line.
+fn maybe_print_first_run_hint() {
+    if let Ok(conn) = index::open_jack_db() {
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .unwrap_or(0);
+        if count == 0 {
+            eprintln!(
+                "Tip: run 'punkgo-jack reindex --full' to backfill historical Claude Code sessions."
+            );
+        }
+    }
+}
+
+fn run_reindex(args: &mut impl Iterator<Item = String>) -> Result<()> {
+    let mut opts = indexer::ReindexOptions::default();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--full" => opts.full = true,
+            "--dry-run" => opts.dry_run = true,
+            "--since" => {
+                opts.since = Some(
+                    args.next()
+                        .context("--since requires an ISO 8601 timestamp")?,
+                );
+            }
+            "--session" => {
+                opts.session = Some(args.next().context("--session requires a session id")?);
+            }
+            other => anyhow::bail!("unknown reindex option: {other}"),
+        }
+    }
+
+    if !opts.full && opts.since.is_none() && opts.session.is_none() {
+        eprintln!("usage: punkgo-jack reindex --full | --since <TS> | --session <ID> [--dry-run]");
+        std::process::exit(1);
+    }
+
+    let report = indexer::run_reindex(opts)?;
+    println!("reindex complete:");
+    println!("  files scanned    : {}", report.files_scanned);
+    println!("  files failed     : {}", report.files_failed);
+    println!("  sessions upserted: {}", report.sessions_upserted);
+    println!("  turns upserted   : {}", report.turns_upserted);
+    println!("  signatures       : {}", report.signatures_upserted);
+    println!("  duration         : {:.1}s", report.duration_seconds);
+    if !report.model_variant_breakdown.is_empty() {
+        println!("  model variants:");
+        let mut sorted: Vec<_> = report.model_variant_breakdown.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1));
+        for (v, c) in sorted {
+            println!("    {c:6} {v}");
+        }
+    }
+    Ok(())
 }
 
 fn run_export(args: &mut impl Iterator<Item = String>) -> Result<()> {

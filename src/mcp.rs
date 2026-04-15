@@ -9,8 +9,9 @@ use rmcp::{
 
 use crate::backend::KernelBackend;
 use crate::tools::{
-    self, PunkgoLogParams, PunkgoQueryParams, PunkgoSessionReceiptParams, PunkgoStatsParams,
-    PunkgoVerifyParams,
+    self, PunkgoHiddenTokensParams, PunkgoLogParams, PunkgoModelVariantsParams, PunkgoQueryParams,
+    PunkgoReindexParams, PunkgoSessionDetailParams, PunkgoSessionListParams,
+    PunkgoSessionReceiptParams, PunkgoStatsParams, PunkgoTurnDetailParams, PunkgoVerifyParams,
 };
 
 pub async fn run_stdio(backend: Box<dyn KernelBackend>) -> Result<()> {
@@ -137,6 +138,90 @@ impl PunkgoMcpServer {
         tools::punkgo_session_receipt(self.backend.as_ref(), params)
             .map_err(|e| self.map_tool_error("punkgo_session_receipt", e))
     }
+
+    #[tool(
+        name = "punkgo_session_list",
+        description = "List Claude Code transcript sessions from the jack index, with optional filters (since/model_variant/source) and keyset pagination"
+    )]
+    async fn punkgo_session_list(
+        &self,
+        Parameters(params): Parameters<PunkgoSessionListParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || tools::punkgo_session_list(params))
+            .await
+            .map_err(|e| self.map_tool_error("punkgo_session_list", anyhow!(e)))?
+            .map_err(|e| self.map_tool_error("punkgo_session_list", e))
+    }
+
+    #[tool(
+        name = "punkgo_session_detail",
+        description = "Return one session row plus all of its turns (ordered) and the model variants observed in it"
+    )]
+    async fn punkgo_session_detail(
+        &self,
+        Parameters(params): Parameters<PunkgoSessionDetailParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || tools::punkgo_session_detail(params))
+            .await
+            .map_err(|e| self.map_tool_error("punkgo_session_detail", anyhow!(e)))?
+            .map_err(|e| self.map_tool_error("punkgo_session_detail", e))
+    }
+
+    #[tool(
+        name = "punkgo_turn_detail",
+        description = "Return one turn row plus its content_blocks_meta and any thinking signature rows"
+    )]
+    async fn punkgo_turn_detail(
+        &self,
+        Parameters(params): Parameters<PunkgoTurnDetailParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || tools::punkgo_turn_detail(params))
+            .await
+            .map_err(|e| self.map_tool_error("punkgo_turn_detail", anyhow!(e)))?
+            .map_err(|e| self.map_tool_error("punkgo_turn_detail", e))
+    }
+
+    #[tool(
+        name = "punkgo_hidden_tokens",
+        description = "Aggregate redacted-thinking token estimates across the jack index, optionally filtered by session or since timestamp"
+    )]
+    async fn punkgo_hidden_tokens(
+        &self,
+        Parameters(params): Parameters<PunkgoHiddenTokensParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || tools::punkgo_hidden_tokens(params))
+            .await
+            .map_err(|e| self.map_tool_error("punkgo_hidden_tokens", anyhow!(e)))?
+            .map_err(|e| self.map_tool_error("punkgo_hidden_tokens", e))
+    }
+
+    #[tool(
+        name = "punkgo_model_variants",
+        description = "List distinct model variants extracted from thinking signatures with first/last seen timestamps and counts"
+    )]
+    async fn punkgo_model_variants(
+        &self,
+        Parameters(params): Parameters<PunkgoModelVariantsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || tools::punkgo_model_variants(params))
+            .await
+            .map_err(|e| self.map_tool_error("punkgo_model_variants", anyhow!(e)))?
+            .map_err(|e| self.map_tool_error("punkgo_model_variants", e))
+    }
+
+    #[tool(
+        name = "punkgo_reindex",
+        description = "Trigger a transcript backfill from ~/.claude/projects/. Requires at least one of: full, since, session. dry_run reports counts without writing."
+    )]
+    async fn punkgo_reindex(
+        &self,
+        Parameters(params): Parameters<PunkgoReindexParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || tools::punkgo_reindex(params))
+            .await
+            .map_err(|e| self.map_tool_error("punkgo_reindex", anyhow!(e)))?
+            .map_err(|e| self.map_tool_error("punkgo_reindex", e))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -165,6 +250,12 @@ mod tests {
         assert!(tools.iter().any(|t| t.name == "punkgo_log"));
         assert!(tools.iter().any(|t| t.name == "punkgo_verify"));
         assert!(tools.iter().any(|t| t.name == "punkgo_session_receipt"));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.iter().any(|t| t.name == "punkgo_session_list"));
+        assert!(tools.iter().any(|t| t.name == "punkgo_session_detail"));
+        assert!(tools.iter().any(|t| t.name == "punkgo_turn_detail"));
+        assert!(tools.iter().any(|t| t.name == "punkgo_hidden_tokens"));
+        assert!(tools.iter().any(|t| t.name == "punkgo_model_variants"));
+        assert!(tools.iter().any(|t| t.name == "punkgo_reindex"));
+        assert_eq!(tools.len(), 13);
     }
 }

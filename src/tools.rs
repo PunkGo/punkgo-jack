@@ -624,6 +624,236 @@ pub fn punkgo_checkpoint(backend: &dyn KernelBackend) -> Result<CallToolResult> 
     finalize_tool_call(result)
 }
 
+// ---------------------------------------------------------------------------
+// Lane D — transcript index tools
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PunkgoSessionListParams {
+    /// ISO 8601 lower bound on `started_at` (e.g. `"2026-04-01T00:00:00Z"`).
+    pub since: Option<String>,
+    /// Filter sessions that contain at least one turn with this model variant.
+    pub model_variant: Option<String>,
+    /// Filter by source label (e.g. `"claude-code"`).
+    pub source: Option<String>,
+    pub limit: Option<u64>,
+    /// Pagination cursor: `session_id` of the last row returned by a prior call.
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PunkgoSessionDetailParams {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PunkgoTurnDetailParams {
+    pub turn_uuid: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PunkgoHiddenTokensParams {
+    pub session_id: Option<String>,
+    /// ISO 8601 lower bound on the turn timestamp.
+    pub since: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PunkgoModelVariantsParams {}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PunkgoReindexParams {
+    pub full: Option<bool>,
+    pub since: Option<String>,
+    pub session: Option<String>,
+    pub dry_run: Option<bool>,
+}
+
+pub fn punkgo_session_list(params: PunkgoSessionListParams) -> Result<CallToolResult> {
+    let result = (|| -> Result<CallToolResult> {
+        let limit = params.limit.unwrap_or(DEFAULT_QUERY_LIMIT).clamp(1, 100) as usize;
+        let conn = crate::index::open_jack_db()?;
+        let rows = crate::index::sessions::list_sessions(
+            &conn,
+            params.since.as_deref(),
+            params.model_variant.as_deref(),
+            params.source.as_deref(),
+            limit,
+            params.cursor.as_deref(),
+        )?;
+        let next_cursor = rows.last().map(|r| r.session_id.clone());
+        Ok(ok_tool_result(json!({
+            "sessions": rows,
+            "next_cursor": next_cursor,
+            "count": rows.len(),
+        })))
+    })();
+    finalize_tool_call(result)
+}
+
+pub fn punkgo_session_detail(params: PunkgoSessionDetailParams) -> Result<CallToolResult> {
+    let result = (|| -> Result<CallToolResult> {
+        let conn = crate::index::open_jack_db()?;
+        let session = crate::index::sessions::get_session(&conn, &params.session_id)?;
+        let Some(session) = session else {
+            return Ok(err_tool_result(format!(
+                "session {} not found",
+                params.session_id
+            )));
+        };
+        let turns = crate::index::turns::list_turns_for_session(&conn, &params.session_id)?;
+        // Distinct variants seen across this session's signature rows.
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT DISTINCT extracted_model_variant
+            FROM thinking_signatures
+            WHERE turn_uuid IN (SELECT turn_uuid FROM turns WHERE session_id = ?1)
+              AND extracted_model_variant IS NOT NULL
+            "#,
+        )?;
+        let variants: Vec<String> = stmt
+            .query_map([&params.session_id], |r| r.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ok_tool_result(json!({
+            "session": session,
+            "turns": turns,
+            "model_variants_seen": variants,
+        })))
+    })();
+    finalize_tool_call(result)
+}
+
+pub fn punkgo_turn_detail(params: PunkgoTurnDetailParams) -> Result<CallToolResult> {
+    let result = (|| -> Result<CallToolResult> {
+        let conn = crate::index::open_jack_db()?;
+        let turn = crate::index::turns::get_turn(&conn, &params.turn_uuid)?;
+        let Some(turn) = turn else {
+            return Ok(err_tool_result(format!(
+                "turn {} not found",
+                params.turn_uuid
+            )));
+        };
+        let signatures =
+            crate::index::signatures::list_signatures_for_turn(&conn, &params.turn_uuid)?;
+        // content_blocks_meta is stored as a JSON string; parse so the caller
+        // sees real structure rather than a quoted string.
+        let cbm: serde_json::Value =
+            serde_json::from_str(&turn.content_blocks_meta).unwrap_or(json!([]));
+        Ok(ok_tool_result(json!({
+            "turn": turn,
+            "content_blocks_meta": cbm,
+            "thinking_signatures": signatures,
+        })))
+    })();
+    finalize_tool_call(result)
+}
+
+pub fn punkgo_hidden_tokens(params: PunkgoHiddenTokensParams) -> Result<CallToolResult> {
+    let result = (|| -> Result<CallToolResult> {
+        let conn = crate::index::open_jack_db()?;
+        let mut sql = String::from(
+            r#"
+            SELECT COALESCE(SUM(estimated_hidden_tokens), 0),
+                   COALESCE(SUM(thinking_block_count), 0),
+                   COUNT(DISTINCT session_id)
+            FROM turns WHERE 1=1
+            "#,
+        );
+        let mut args: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(sid) = &params.session_id {
+            sql.push_str(" AND session_id = ?");
+            args.push(rusqlite::types::Value::Text(sid.clone()));
+        }
+        if let Some(since) = &params.since {
+            sql.push_str(" AND timestamp >= ?");
+            args.push(rusqlite::types::Value::Text(since.clone()));
+        }
+        let (hidden, thinking_blocks, session_count): (i64, i64, i64) =
+            conn.query_row(&sql, rusqlite::params_from_iter(args.iter()), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?;
+
+        // Breakdown by model variant.
+        let mut sql2 = String::from(
+            r#"
+            SELECT model_variant, COALESCE(SUM(estimated_hidden_tokens), 0)
+            FROM turns
+            WHERE model_variant IS NOT NULL
+            "#,
+        );
+        let mut args2: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(sid) = &params.session_id {
+            sql2.push_str(" AND session_id = ?");
+            args2.push(rusqlite::types::Value::Text(sid.clone()));
+        }
+        if let Some(since) = &params.since {
+            sql2.push_str(" AND timestamp >= ?");
+            args2.push(rusqlite::types::Value::Text(since.clone()));
+        }
+        sql2.push_str(" GROUP BY model_variant");
+        let mut stmt = conn.prepare(&sql2)?;
+        let mut breakdown: BTreeMap<String, i64> = BTreeMap::new();
+        let iter = stmt.query_map(rusqlite::params_from_iter(args2.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        for row in iter.flatten() {
+            breakdown.insert(row.0, row.1);
+        }
+
+        Ok(ok_tool_result(json!({
+            "total_hidden_tokens_est": hidden,
+            "total_thinking_blocks": thinking_blocks,
+            "session_count": session_count,
+            "breakdown_by_variant": breakdown,
+        })))
+    })();
+    finalize_tool_call(result)
+}
+
+pub fn punkgo_model_variants(_params: PunkgoModelVariantsParams) -> Result<CallToolResult> {
+    let result = (|| -> Result<CallToolResult> {
+        let conn = crate::index::open_jack_db()?;
+        let stats = crate::index::signatures::list_distinct_variants(&conn)?;
+        Ok(ok_tool_result(json!({
+            "variants": stats,
+            "count": stats.len(),
+        })))
+    })();
+    finalize_tool_call(result)
+}
+
+pub fn punkgo_reindex(params: PunkgoReindexParams) -> Result<CallToolResult> {
+    let result = (|| -> Result<CallToolResult> {
+        let opts = crate::indexer::ReindexOptions {
+            full: params.full.unwrap_or(false),
+            since: params.since,
+            session: params.session,
+            dry_run: params.dry_run.unwrap_or(false),
+        };
+        if !opts.full && opts.since.is_none() && opts.session.is_none() {
+            return Ok(err_tool_result(
+                "punkgo_reindex requires at least one of: full=true, since, session".to_string(),
+            ));
+        }
+        let report = crate::indexer::run_reindex(opts)?;
+        Ok(ok_tool_result(serde_json::to_value(report)?))
+    })();
+    finalize_tool_call(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -199,6 +199,12 @@ fn run_inner(args: &IngestArgs) -> Result<()> {
         }
     };
 
+    // 6a. Lane D: dispatch transcript scan on hook events that signal a
+    // turn boundary. Fire-and-forget — never fail the hook on indexer errors.
+    if resp.status == "ok" && args.source == "claude-code" {
+        dispatch_transcript_scan(&event.event_type, &claude_session_id, &raw_json);
+    }
+
     // 6. Output result.
     match resp.status.as_str() {
         "ok" => {
@@ -316,6 +322,51 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<IngestArgs>
         receipt,
         summary,
     })
+}
+
+/// Lane D: fire-and-forget dispatch to `indexer::scan_on_trigger` for hook
+/// events that signal a turn/session boundary. The async task writes a
+/// `pending_scans` row (durable) and spawns a background drainer. Indexer
+/// errors are logged but never fail the hook.
+fn dispatch_transcript_scan(event_type: &str, session_id: &str, raw_json: &Value) {
+    let triggers = matches!(
+        event_type,
+        "agent_stop" | "subagent_stop" | "session_end" | "stop_failure"
+    );
+    if !triggers || session_id == "unknown" {
+        return;
+    }
+    let transcript_path = raw_json
+        .get("transcript_path")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let session_id = session_id.to_string();
+
+    // We're inside a sync `run_inner` — spawn a short-lived runtime to
+    // call the async enqueue. Building a current-thread runtime is cheap
+    // (~µs) and keeps the indexer module's public API uniformly async.
+    let result = std::thread::Builder::new()
+        .name("punkgo-indexer-dispatch".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    debug!(error = %e, "indexer dispatch: failed to build runtime");
+                    return;
+                }
+            };
+            if let Err(e) =
+                rt.block_on(crate::indexer::scan_on_trigger(session_id, transcript_path))
+            {
+                debug!(error = %e, "indexer scan_on_trigger returned error");
+            }
+        });
+    if let Err(e) = result {
+        debug!(error = %e, "indexer dispatch: failed to spawn thread");
+    }
 }
 
 fn read_stdin() -> Result<Value> {
