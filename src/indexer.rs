@@ -236,13 +236,12 @@ fn process_pending_scan(
     // Ensure session row exists (create from records if missing).
     ensure_session_exists(&tx, session_id, Some(path_str.as_str()), &records)?;
 
-    // Insert turns + signatures.
-    let next_order = next_turn_order(&tx, session_id)?;
-    let mut order = next_order;
+    // Insert turns + signatures. turn_order is derived from the canonical
+    // jsonl byte offset so Path A (here) and Path B (full reindex below)
+    // produce identical values for the same turn_uuid. No per-path counter.
     for record in &records {
-        upsert_turn_from_record(&tx, record, order, None)?;
+        upsert_turn_from_record(&tx, record, record.file_offset as i64, None)?;
         upsert_signatures_from_record(&tx, record)?;
-        order += 1;
     }
 
     sessions::update_scan_offset(&tx, session_id, new_offset, None)?;
@@ -324,17 +323,10 @@ fn compute_aggregates_from_db(conn: &Connection, session_id: &str) -> Result<Ses
     })
 }
 
-fn next_turn_order(conn: &Connection, session_id: &str) -> Result<i64> {
-    let max_order: Option<i64> = conn
-        .query_row(
-            "SELECT MAX(turn_order) FROM turns WHERE session_id = ?1",
-            params![session_id],
-            |r| r.get(0),
-        )
-        .optional()?
-        .flatten();
-    Ok(max_order.map(|m| m + 1).unwrap_or(0))
-}
+// next_turn_order was deleted in the v0.6.0 no-debt pass: turn_order is
+// now the canonical jsonl byte offset (record.file_offset) so Path A and
+// Path B produce identical values for the same turn_uuid without any
+// per-path sequence counter.
 
 // ---------------------------------------------------------------------------
 // Path B — full backfill
@@ -447,8 +439,10 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             let mut local_turns = 0usize;
             let mut local_sigs = 0usize;
             let mut local_variants: HashMap<String, usize> = HashMap::new();
-            for (order, record) in records.iter().enumerate() {
-                upsert_turn_from_record(&tx, record, order as i64, None)?;
+            // turn_order = record.file_offset (the canonical jsonl byte
+            // offset) so this path agrees with Path A on every turn_uuid.
+            for record in &records {
+                upsert_turn_from_record(&tx, record, record.file_offset as i64, None)?;
                 local_turns += 1;
                 for block in &record.content_blocks {
                     if let ContentBlockRecord::Thinking { signature_b64, .. } = block {
@@ -1178,6 +1172,121 @@ mod tests {
         assert_eq!(turns_total as usize, r1.turns_upserted);
     }
 
+    /// P2 → v0.6.0 no-debt: asserts that Path A (hook-triggered
+    /// incremental) and Path B (full reindex) produce **identical**
+    /// `turn_order` values for the same `turn_uuid`. Before the fix,
+    /// Path A used `MAX(turn_order) + 1` (append) and Path B used
+    /// `records.iter().enumerate()` (rewrite from 0), so the same
+    /// turn could have `turn_order = 0` after a reindex and `turn_order
+    /// = 5` after an incremental scan — any downstream consumer that
+    /// joined or diffed on `turn_order` saw flapping values. The fix
+    /// routes both paths through the scanner's stable `file_offset`
+    /// (byte position in the jsonl), so ordering is path-agnostic
+    /// and re-run-stable.
+    #[test]
+    fn turn_order_is_path_agnostic() {
+        use std::collections::HashMap;
+
+        let _guard = DataDirGuard::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Build a 3-turn synthetic transcript. Note: we have to craft
+        // the lines via the same helper the other tests use so the
+        // content is parseable by the scanner.
+        let session_id = "sess-pathagnostic";
+        let lines = vec![
+            synth_assistant_line("turn-a", session_id, true),
+            synth_assistant_line("turn-b", session_id, false),
+            synth_assistant_line("turn-c", session_id, true),
+        ];
+        let path = write_synth_jsonl(tmp.path(), session_id, &lines);
+
+        // --- Path A: drive Path A by enqueueing + draining directly ---
+        enqueue_pending_scan(session_id, Some(path.to_str().unwrap())).unwrap();
+        let processed = drain_pending_scans().unwrap();
+        assert_eq!(processed, 1);
+
+        let conn_a = index::open_jack_db().unwrap();
+        let mut stmt = conn_a
+            .prepare(
+                "SELECT turn_uuid, turn_order FROM turns WHERE session_id = ?1 \
+                 ORDER BY turn_order ASC",
+            )
+            .unwrap();
+        let rows_a: HashMap<String, i64> = stmt
+            .query_map(params![session_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        drop(conn_a);
+        assert_eq!(
+            rows_a.len(),
+            3,
+            "path A should have produced 3 turn rows, got {rows_a:?}"
+        );
+        // All three orders must be distinct and non-negative.
+        let mut orders_a: Vec<i64> = rows_a.values().copied().collect();
+        orders_a.sort();
+        orders_a.dedup();
+        assert_eq!(orders_a.len(), 3, "path A orders must be distinct");
+
+        // --- Path B: full reindex using the same file, via run_reindex ---
+        // Point HOME at tmp.path() so walk_jsonl finds .claude/projects
+        // under it. build_synth_archive puts files at
+        // `$root/.claude/projects/test-project/<session>.jsonl`, but we
+        // wrote ours directly — rebuild under the expected layout.
+        let archive_tmp = tempfile::TempDir::new().unwrap();
+        let projects = archive_tmp
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("test-project");
+        std::fs::create_dir_all(&projects).unwrap();
+        write_synth_jsonl(&projects, session_id, &lines);
+
+        let prev_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", archive_tmp.path());
+        let report = run_reindex(ReindexOptions {
+            full: true,
+            ..Default::default()
+        })
+        .unwrap();
+        if let Some(h) = prev_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        assert_eq!(report.turns_upserted, 3);
+
+        let conn_b = index::open_jack_db().unwrap();
+        let mut stmt = conn_b
+            .prepare(
+                "SELECT turn_uuid, turn_order FROM turns WHERE session_id = ?1 \
+                 ORDER BY turn_order ASC",
+            )
+            .unwrap();
+        let rows_b: HashMap<String, i64> = stmt
+            .query_map(params![session_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        drop(conn_b);
+
+        // The critical invariant: for every turn_uuid we saw in Path A,
+        // Path B emits the IDENTICAL turn_order value.
+        assert_eq!(
+            rows_a, rows_b,
+            "turn_order diverged between Path A and Path B: \
+             path_a={rows_a:?} path_b={rows_b:?}"
+        );
+    }
+
     #[test]
     fn reconcile_on_startup_drains_queue() {
         let _guard = DataDirGuard::new();
@@ -1213,6 +1322,7 @@ mod tests {
             session_id: "s".into(),
             role: "assistant".into(),
             timestamp: "2026-04-15T00:00:00Z".into(),
+            file_offset: 0,
             cwd: None,
             git_branch: None,
             is_sidechain: false,

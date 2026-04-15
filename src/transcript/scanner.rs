@@ -28,6 +28,18 @@ pub struct TurnRecord {
     pub role: String,
     /// ISO 8601 timestamp as-is from jsonl.
     pub timestamp: String,
+    /// Absolute byte offset in the jsonl file where this turn's line begins.
+    ///
+    /// This is the **stable canonical ordering key** across both scan paths
+    /// (full scan from offset 0 and incremental scan from a saved offset).
+    /// Claude Code's jsonl files are append-only: once a turn is written at
+    /// a given byte position, that position never moves. So
+    /// `file_offset` survives file re-reads and is identical whether the
+    /// turn is visited by `scan_file` or `scan_incremental`. The indexer
+    /// uses it as `turns.turn_order` so path-dependent numbering cannot
+    /// happen. Tests assert path-agnostic stability.
+    #[serde(default)]
+    pub file_offset: u64,
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
@@ -110,7 +122,7 @@ impl TranscriptScanner {
     pub fn scan_file(path: &Path) -> Result<Vec<TurnRecord>> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        Ok(scan_reader(reader, path, None))
+        Ok(scan_reader(reader, path, None, 0))
     }
 
     /// Incremental scan starting at `from_byte_offset`. Returns (new turns,
@@ -149,7 +161,7 @@ impl TranscriptScanner {
         file.seek(SeekFrom::Start(from_byte_offset))?;
         let reader = BufReader::new(file);
 
-        let records = scan_reader(reader, path, Some(skip_first_partial));
+        let records = scan_reader(reader, path, Some(skip_first_partial), from_byte_offset);
 
         // Re-open to compute end offset (we consumed the reader).
         let end_offset = File::open(path)?.metadata()?.len();
@@ -163,18 +175,33 @@ impl TranscriptScanner {
 ///
 /// `skip_first_partial`: if `Some(true)`, the first line read is dropped
 /// (used by incremental scan when the start offset may land mid-line).
+/// `start_offset`: absolute byte position in the file at which `reader`
+/// starts reading. Used to compute each turn's `file_offset` — the
+/// canonical ordering key. For full scans pass 0; for incremental scans
+/// pass the `from_byte_offset` value so emitted offsets are absolute.
+///
+/// We switch from `BufRead::lines()` to manual `read_line` so we can
+/// track the byte position of each line start. `.lines()` silently
+/// discards line-terminator bytes, which breaks offset arithmetic.
 fn scan_reader<R: BufRead>(
-    reader: R,
+    mut reader: R,
     path: &Path,
     skip_first_partial: Option<bool>,
+    start_offset: u64,
 ) -> Vec<TurnRecord> {
     let mut out: Vec<TurnRecord> = Vec::new();
     let mut first_data_line = true;
     let mut dropped_partial = skip_first_partial.unwrap_or(false);
+    let mut current_offset = start_offset;
+    let mut line_no: usize = 0;
+    let mut line_buf = String::new();
 
-    for (line_no, line_result) in reader.lines().enumerate() {
-        let line = match line_result {
-            Ok(l) => l,
+    loop {
+        line_buf.clear();
+        let line_start = current_offset;
+        let bytes_read = match reader.read_line(&mut line_buf) {
+            Ok(0) => break,
+            Ok(n) => n,
             Err(e) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -185,19 +212,26 @@ fn scan_reader<R: BufRead>(
                 break;
             }
         };
+        current_offset += bytes_read as u64;
+        line_no += 1;
+
+        // Strip trailing line terminators without touching interior content.
+        let line = line_buf.trim_end_matches(['\n', '\r']);
 
         if line.trim().is_empty() {
             continue;
         }
 
-        // Drop the first (possibly partial) line if this is an incremental scan.
+        // Drop the first (possibly partial) line if this is an incremental
+        // scan whose starting offset landed mid-line. `current_offset` has
+        // already advanced past it, so subsequent turns get correct offsets.
         if dropped_partial {
             dropped_partial = false;
             first_data_line = false; // downgrade; corrupt-first-line heuristic N/A for incr
             continue;
         }
 
-        let value: Value = match serde_json::from_str(&line) {
+        let value: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
                 if first_data_line {
@@ -211,7 +245,7 @@ fn scan_reader<R: BufRead>(
                 }
                 tracing::warn!(
                     path = %path.display(),
-                    line = line_no + 1,
+                    line = line_no,
                     error = %e,
                     "malformed jsonl line, skipping"
                 );
@@ -221,7 +255,11 @@ fn scan_reader<R: BufRead>(
 
         first_data_line = false;
 
-        if let Some(record) = build_turn_record(&value) {
+        if let Some(mut record) = build_turn_record(&value) {
+            // Stamp the canonical file offset onto the record so Path A
+            // (incremental) and Path B (full reindex) produce identical
+            // turn_order values for the same turn_uuid.
+            record.file_offset = line_start;
             out.push(record);
         }
     }
@@ -309,6 +347,12 @@ fn build_turn_record(obj: &Value) -> Option<TurnRecord> {
         session_id,
         role,
         timestamp,
+        // file_offset is stamped by scan_reader after this function returns;
+        // 0 is a safe placeholder because real turns are never at offset 0
+        // (the first byte of the first line is actually the starting `{` of
+        // the first record, i.e. offset 0, so *the first* turn legitimately
+        // has file_offset 0 — it's not a sentinel, just a stable key).
+        file_offset: 0,
         cwd,
         git_branch,
         is_sidechain,
