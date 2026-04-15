@@ -329,12 +329,20 @@ pub fn parse_args(args: &mut impl Iterator<Item = String>) -> Result<IngestArgs>
 /// `pending_scans` row (durable) and spawns a background drainer. Indexer
 /// errors are logged but never fail the hook.
 fn dispatch_transcript_scan(event_type: &str, session_id: &str, raw_json: &Value) {
-    // P2 review fix (2026-04-15): the previous list included "stop_failure"
-    // which is never emitted by any adapter. claude_code.rs maps
-    // PostToolUseFailure to `<tool>_failed` (e.g. `command_execution_failed`),
-    // not to a generic `stop_failure`. Dropping the dead arm so future
-    // maintainers don't assume tool-failure triggers a transcript scan.
-    let triggers = matches!(event_type, "agent_stop" | "subagent_stop" | "session_end");
+    // Session-boundary triggers for Path A transcript scanning.
+    //
+    // History note: "stop_failure" was briefly removed during the
+    // post-Lane-D review pass because no adapter emitted it. Lane B
+    // (v0.6.0) then added the `StopFailure` Claude Code hook whose
+    // adapter match arm emits `event_type = "stop_failure"`, so the
+    // trigger is now live and meaningful: a StopFailure event means the
+    // agent hit an unrecoverable condition mid-turn, and we want to scan
+    // the transcript so the partial turns are captured before the
+    // session is abandoned.
+    let triggers = matches!(
+        event_type,
+        "agent_stop" | "subagent_stop" | "session_end" | "stop_failure"
+    );
     if !triggers || session_id == "unknown" {
         return;
     }

@@ -85,6 +85,42 @@ fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, Vec<String>)> {
             "Notification",
             vec![format!("{exe_cmd} ingest --source {source} --quiet")],
         ),
+        // v0.6.0 Lane B — 5 additional Claude Code hooks. Cursor filters
+        // these out via `cursor_event_name` returning None, so passing the
+        // same list here is safe for both sources.
+        //
+        // InstructionsLoaded: a CLAUDE.md / memory / skill file was loaded
+        //   into context at session boot or mid-session refresh. Populates
+        //   sessions.loaded_instructions in the jack index.
+        (
+            "InstructionsLoaded",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // PreCompact: the agent is about to compact its conversation. The
+        // payload surfaces the trigger and token counts.
+        (
+            "PreCompact",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // PostCompact: compaction done. Payload surfaces the summary length
+        // and the old → new token delta.
+        (
+            "PostCompact",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // StopFailure: agent stopped because of an API error / timeout /
+        // other unrecoverable condition. Triggers a transcript rescan so
+        // partial turns are captured before the session disappears.
+        (
+            "StopFailure",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        // PermissionDenied: user refused a permission request from the
+        // agent. Payload includes the tool name and the refused action.
+        (
+            "PermissionDenied",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
     ]
 }
 
@@ -210,6 +246,14 @@ fn cursor_event_name(claude_name: &str) -> Option<&str> {
         "SubagentStop" => "subagentStop",
         // Notification is Claude Code only — skip for Cursor.
         "Notification" => return None,
+        // v0.6.0 Lane B — all 5 additions are Claude Code specific.
+        // Cursor's hook model does not emit these events and the cursor
+        // adapter path is explicitly out of scope per the v0.6.0 plan.
+        "InstructionsLoaded" => return None,
+        "PreCompact" => return None,
+        "PostCompact" => return None,
+        "StopFailure" => return None,
+        "PermissionDenied" => return None,
         // IMPORTANT: new Claude Code-only events must return None above.
         // Falling through passes PascalCase name to Cursor, which silently ignores it.
         other => other,
@@ -1240,7 +1284,7 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 10); // 10 unique event names
+        assert_eq!(hooks.len(), 15); // 10 pre-v0.6.0 + 5 Lane B additions
                                      // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
         let se = hooks["SessionEnd"].as_array().unwrap();
         assert_eq!(se.len(), 1);
@@ -1363,13 +1407,25 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        assert_eq!(hooks.len(), 10); // 10 unique event names
+        // 10 pre-v0.6.0 event names + 5 v0.6.0 Lane B additions = 15.
+        assert_eq!(
+            hooks.len(),
+            15,
+            "expected 15 hook event names, got {}",
+            hooks.len()
+        );
         assert!(hooks.contains_key("PreToolUse"));
         assert!(hooks.contains_key("PostToolUse"));
         assert!(hooks.contains_key("PostToolUseFailure"));
         assert!(hooks.contains_key("UserPromptSubmit"));
         assert!(hooks.contains_key("SessionStart"));
         assert!(hooks.contains_key("SessionEnd"));
+        // v0.6.0 Lane B additions must all be present for Claude Code.
+        assert!(hooks.contains_key("InstructionsLoaded"));
+        assert!(hooks.contains_key("PreCompact"));
+        assert!(hooks.contains_key("PostCompact"));
+        assert!(hooks.contains_key("StopFailure"));
+        assert!(hooks.contains_key("PermissionDenied"));
         // SessionEnd has 1 entry with 2 inner hooks (ingest + anchor).
         assert_eq!(
             hooks["SessionEnd"].as_array().unwrap()[0]["hooks"]
@@ -1385,5 +1441,50 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    /// v0.6.0 Lane B: the 5 Claude Code-only hooks must NOT end up in
+    /// Cursor's settings. `cursor_event_name` returns None for each one,
+    /// and the cursor setup path filters them out. This test locks in
+    /// that filter so a future refactor doesn't accidentally leak them.
+    #[test]
+    fn cursor_filters_out_lane_b_events() {
+        for claude_only in [
+            "Notification",
+            "InstructionsLoaded",
+            "PreCompact",
+            "PostCompact",
+            "StopFailure",
+            "PermissionDenied",
+        ] {
+            assert!(
+                cursor_event_name(claude_only).is_none(),
+                "{claude_only} must not map to a Cursor event"
+            );
+        }
+    }
+
+    /// v0.6.0 Lane B: `hook_events` must register all 5 new Claude Code
+    /// hooks in the returned list (they are claude-code only but the
+    /// cursor path filters them via `cursor_event_name` rather than by
+    /// skipping them here).
+    #[test]
+    fn hook_events_includes_lane_b_additions() {
+        let events = hook_events("punkgo-jack", "claude-code");
+        let names: std::collections::HashSet<&str> = events.iter().map(|(n, _)| *n).collect();
+        for expected in [
+            "InstructionsLoaded",
+            "PreCompact",
+            "PostCompact",
+            "StopFailure",
+            "PermissionDenied",
+        ] {
+            assert!(
+                names.contains(expected),
+                "hook_events missing {expected}; got {names:?}"
+            );
+        }
+        // Total = 10 existing + 5 new = 15.
+        assert_eq!(events.len(), 15);
     }
 }

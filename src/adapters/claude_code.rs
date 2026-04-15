@@ -86,6 +86,121 @@ impl HookAdapter for ClaudeCodeAdapter {
                     source: "claude-code".into(),
                 });
             }
+            // v0.6.0 Lane B — 5 additional hooks. Each captures the
+            // PayloadShape-specific fields defensively: if a field the plan
+            // expects is absent, the adapter still produces a valid event
+            // with empty metadata (never panics on missing keys).
+            "InstructionsLoaded" => {
+                let mut meta = build_session_metadata(raw);
+                for key in ["file_path", "memory_type", "load_reason", "source"] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let memory_type = str_field(raw, "memory_type");
+                let file_path = str_field(raw, "file_path");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("instructions:{memory_type}"),
+                    event_type: "instructions_loaded".into(),
+                    content: format!("Instructions loaded: {file_path}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "PreCompact" => {
+                let mut meta = build_session_metadata(raw);
+                for key in ["trigger", "input_tokens", "total_tokens"] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let trigger = str_field(raw, "trigger");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("compact:pre:{trigger}"),
+                    event_type: "pre_compact".into(),
+                    content: format!("Pre-compact ({trigger})"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "PostCompact" => {
+                let mut meta = build_session_metadata(raw);
+                for key in [
+                    "trigger",
+                    "input_tokens_before",
+                    "input_tokens_after",
+                    "summary",
+                    "summary_tokens",
+                ] {
+                    if let Some(v) = raw.get(key) {
+                        // Externalize summary body if large. All other keys
+                        // are numeric / short strings and stay inline.
+                        if key == "summary" {
+                            if let Some(s) = v.as_str() {
+                                let value = crate::blob::externalize_or_inline(
+                                    "compact_summary",
+                                    s,
+                                    max_inline_bytes(),
+                                )
+                                .unwrap_or_else(|_| json!({ "inline": s }));
+                                meta.insert("compact_summary".into(), value);
+                                continue;
+                            }
+                        }
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let trigger = str_field(raw, "trigger");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("compact:post:{trigger}"),
+                    event_type: "post_compact".into(),
+                    content: format!("Post-compact ({trigger})"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "StopFailure" => {
+                let mut meta = build_session_metadata(raw);
+                for key in [
+                    "error_type",
+                    "error_message",
+                    "last_api_request_id",
+                    "last_model",
+                ] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let err_type = str_field(raw, "error_type");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("session:StopFailure:{err_type}"),
+                    event_type: "stop_failure".into(),
+                    content: format!("Stop failure: {err_type}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "PermissionDenied" => {
+                let mut meta = build_session_metadata(raw);
+                for key in ["tool_name", "action", "reason", "requested_by"] {
+                    if let Some(v) = raw.get(key) {
+                        meta.insert(key.into(), v.clone());
+                    }
+                }
+                let tool_name = str_field(raw, "tool_name");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("permission_denied:{tool_name}"),
+                    event_type: "permission_denied".into(),
+                    content: format!("Permission denied for tool: {tool_name}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
             "UserPromptSubmit" => {
                 let mut meta = build_prompt_metadata(raw);
                 let image_count = meta.get("image_count").and_then(Value::as_u64).unwrap_or(0);
@@ -1068,5 +1183,184 @@ mod tests {
         assert_eq!(event.event_type, "notification");
         assert_eq!(event.target, "notification:permission_prompt");
         assert!(event.content.contains("Claude wants to run"));
+    }
+
+    // ---- v0.6.0 Lane B: 5 new hook adapter tests ----
+
+    #[test]
+    fn transform_instructions_loaded() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "InstructionsLoaded",
+            "session_id": "ses_il",
+            "cwd": "/work/project",
+            "file_path": "/work/project/CLAUDE.md",
+            "memory_type": "project",
+            "load_reason": "session_start"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "instructions_loaded");
+        assert_eq!(event.target, "instructions:project");
+        assert!(event.content.contains("CLAUDE.md"));
+        assert_eq!(
+            event.metadata.get("file_path"),
+            Some(&json!("/work/project/CLAUDE.md"))
+        );
+        assert_eq!(event.metadata.get("memory_type"), Some(&json!("project")));
+        assert_eq!(
+            event.metadata.get("load_reason"),
+            Some(&json!("session_start"))
+        );
+    }
+
+    #[test]
+    fn transform_pre_compact() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "ses_pc",
+            "trigger": "auto",
+            "input_tokens": 180_000,
+            "total_tokens": 195_000
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "pre_compact");
+        assert_eq!(event.target, "compact:pre:auto");
+        assert_eq!(event.metadata.get("trigger"), Some(&json!("auto")));
+        assert_eq!(event.metadata.get("input_tokens"), Some(&json!(180_000)));
+    }
+
+    #[test]
+    fn transform_post_compact_small_summary() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "PostCompact",
+            "session_id": "ses_pc",
+            "trigger": "auto",
+            "input_tokens_before": 180_000,
+            "input_tokens_after": 42_000,
+            "summary_tokens": 1_500,
+            "summary": "compressed conversation state"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "post_compact");
+        assert_eq!(event.target, "compact:post:auto");
+        assert_eq!(
+            event.metadata.get("input_tokens_before"),
+            Some(&json!(180_000))
+        );
+        // Summary externalized through blob helper; small → inline shape.
+        let compact_summary = event
+            .metadata
+            .get("compact_summary")
+            .expect("compact_summary key missing");
+        assert!(
+            compact_summary.get("inline").is_some(),
+            "small summary should be inline"
+        );
+    }
+
+    #[test]
+    fn transform_stop_failure() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "StopFailure",
+            "session_id": "ses_sf",
+            "error_type": "api_error",
+            "error_message": "upstream 529 overloaded",
+            "last_api_request_id": "req_abc123",
+            "last_model": "claude-opus-4-6"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "stop_failure");
+        assert_eq!(event.target, "session:StopFailure:api_error");
+        assert!(event.content.contains("api_error"));
+        assert_eq!(
+            event.metadata.get("last_api_request_id"),
+            Some(&json!("req_abc123"))
+        );
+    }
+
+    #[test]
+    fn transform_permission_denied() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "PermissionDenied",
+            "session_id": "ses_pd",
+            "tool_name": "Bash",
+            "action": "rm -rf /tmp/foo",
+            "reason": "user_declined"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "permission_denied");
+        assert_eq!(event.target, "permission_denied:Bash");
+        assert!(event.content.contains("Bash"));
+        assert_eq!(event.metadata.get("reason"), Some(&json!("user_declined")));
+    }
+
+    /// Privacy audit: all 5 new event types must never leak raw body
+    /// content into any string field we construct. PostCompact is the
+    /// highest-risk surface because it carries a summary payload.
+    #[test]
+    fn lane_b_events_privacy_summary_large_goes_to_blob() {
+        let adapter = ClaudeCodeAdapter;
+        // 10 KB of distinctive pattern as a summary. Must go through the
+        // blob store (not inline) and must not appear verbatim in
+        // event.content or any metadata value besides the blob-hash ref.
+        let big = "SECRET_COMPACT_SUMMARY_NEEDLE_"
+            .chars()
+            .cycle()
+            .take(10 * 1024)
+            .collect::<String>();
+        // Redirect PUNKGO_DATA_DIR to a tempdir so the blob write happens
+        // in an isolated location.
+        let _lock = crate::session::PUNKGO_DATA_DIR_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("PUNKGO_DATA_DIR");
+        std::env::set_var("PUNKGO_DATA_DIR", tmp.path());
+
+        let raw = json!({
+            "hook_event_name": "PostCompact",
+            "session_id": "ses_priv",
+            "trigger": "auto",
+            "summary": big,
+        });
+        let event = adapter.transform(&raw).unwrap();
+
+        // Restore env var before assertions so a failure doesn't pollute.
+        match prev {
+            Some(v) => std::env::set_var("PUNKGO_DATA_DIR", v),
+            None => std::env::remove_var("PUNKGO_DATA_DIR"),
+        }
+
+        assert_eq!(event.event_type, "post_compact");
+        // The summary must be in the blob store, not inline.
+        let cs = event.metadata.get("compact_summary").unwrap();
+        assert!(
+            cs.get("blob_hash").is_some(),
+            "large summary should be routed to blob store: {cs}"
+        );
+        assert!(
+            cs.get("inline").is_none(),
+            "large summary must NOT be inline"
+        );
+        // Double-check: the event.content display label must not contain
+        // the needle (it's a short `Post-compact (auto)` string).
+        assert!(
+            !event.content.contains("SECRET_COMPACT_SUMMARY_NEEDLE_"),
+            "needle leaked into event.content"
+        );
+        // And serialized metadata (excluding the blob ref object) must not
+        // contain the needle either.
+        let serialized = serde_json::to_string(&event.metadata).unwrap();
+        // The blob_hash ref itself is fine (it's a sha256, no needle).
+        // Anywhere ELSE the needle should not appear.
+        let needle_count = serialized.matches("SECRET_COMPACT_SUMMARY_NEEDLE_").count();
+        assert_eq!(
+            needle_count, 0,
+            "needle leaked into serialized metadata: {needle_count} occurrences"
+        );
     }
 }
