@@ -4,6 +4,12 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.6.2] - 2026-04-16
+
+### Fixed
+
+- **Reindex report matches DB exactly** — three-layer dedup (Rust HashSet + INSERT OR IGNORE + final SELECT COUNT) ensures `turns upserted` always equals the actual row count. Fixes report inflation from parent↔subagent turn overlaps.
+
 ## [0.6.1] - 2026-04-16
 
 Accuracy and correctness fixes for the transcript indexer. **Recommended upgrade from 0.6.0.**

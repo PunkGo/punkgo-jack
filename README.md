@@ -146,7 +146,8 @@ Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatica
 
 | Version | What changed |
 |---------|-------------|
-| **v0.6.1** | Reindex accuracy, subagent scan, stable turn ordering. **Upgrade from 0.6.0 recommended.** |
+| **v0.6.2** | Reindex report matches DB exactly. |
+| v0.6.1 | Reindex accuracy, subagent scan, stable turn ordering. |
 | v0.6.0 | Transcript Archaeologist — jack.db index, 6 MCP tools, `reindex` CLI, 15 hooks, signature parser |
 | v0.5.4 | Built-in `roast` command (local coding data analysis) |
 | v0.5.3 | Fix setup hang on macOS |
