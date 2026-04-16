@@ -4,6 +4,39 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.6.0] - 2026-04-16
+
+**The Transcript Archaeologist.** Jack learns to read Claude Code's local transcript archive and build a searchable index of every turn, every thinking signature, every redacted token.
+
+### Added
+
+- **`punkgo-jack reindex` CLI** — backfill from `~/.claude/projects/*.jsonl`. Flags: `--full`, `--since`, `--session`, `--dry-run`. 389 files / 39 sessions / 44,949 turns indexed in 6.4 seconds on the dev machine.
+- **jack.db** — new SQLite index at `~/.punkgo/state/jack/jack.db`, separate from kernel. Tables: `sessions`, `turns`, `thinking_signatures`, `pending_scans`. Rollback = delete the file.
+- **6 new MCP tools** — `punkgo_session_list`, `punkgo_session_detail`, `punkgo_turn_detail`, `punkgo_hidden_tokens`, `punkgo_model_variants`, `punkgo_reindex`.
+- **5 new Claude Code hooks** — InstructionsLoaded, PreCompact, PostCompact, StopFailure, PermissionDenied. Hook count 10 → 15. Cursor filters all 5 automatically.
+- **Transcript scanner** (`src/transcript/`) — streaming jsonl reader, metadata-only output, stable byte-offset turn ordering.
+- **Signature parser** (`src/signature/`) — extracts model variant strings from thinking block signatures. Detected variants: `numbat-v6-efforts-10-20-40-ab-prod`, `claude-opus-4-6`, `claude-haiku-4-5-20251001`. 99.4% hit rate on real data.
+- **Three indexer recovery paths** — hook-triggered incremental, full backfill, startup reconciliation with durable `pending_scans` queue.
+- **`externalize_or_inline` blob helper** — routes large adapter content to blob store (> 4 KB). Env override: `PUNKGO_MAX_INLINE_BYTES`.
+
+### Fixed
+
+- **Silent truncation removed** — `last_assistant_message` (500 bytes), user prompt (200 bytes), and Bash command display (200 bytes) no longer truncated. Full content preserved via blob store.
+- **Subagent session merge** — subagent jsonl files now correctly fold into their parent session instead of creating orphan session rows.
+- **Fork-safe turn upsert** — forked sessions no longer steal turns from the original session. First-write-wins on `turn_uuid` across sessions.
+
+### Changed
+
+- `meta["last_assistant_message"]` is now `{"inline": "..."}` or `{"blob_hash": ...}` instead of a bare string.
+- `turns.turn_order` is now the canonical jsonl byte offset (stable across incremental and full reindex paths).
+- `sessions_upserted` in reindex reports reflects unique parent sessions (39), not file count (389).
+
+### Internal
+
+- `rusqlite 0.32` (bundled), `regex 1`, `once_cell 1` added as dependencies.
+- 298 unit tests, 20-session independent oracle cross-check on real data.
+- Dead fallback code in signature parser removed (proven unreachable for current regex family).
+
 ## [0.5.4] - 2026-03-20
 
 ### Added

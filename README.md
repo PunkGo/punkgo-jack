@@ -104,7 +104,8 @@ A root operator with the signing key could rebuild the tree — this is the sing
 | `anchor` | Anchor latest checkpoint to TSA |
 | `presence` | Energy heatmap across agents |
 | `export` | Export events as markdown or JSON |
-| `serve` | MCP server (7 tools for agent self-query) |
+| `serve` | MCP server (13 tools for agent self-query) |
+| `reindex` | Backfill transcript index (`--full`, `--since`, `--session`, `--dry-run`) |
 | `roast` | AI personality diagnosis from local data (`roast help`) |
 | `upgrade` | Self-update (no re-setup needed) |
 
@@ -126,9 +127,9 @@ Disable TSA: set `enabled = false` or `PUNKGO_TSA_ENABLED=false`. Other env vars
 
 | Tool | Status | Setup |
 |------|--------|-------|
-| **Claude Code** | Supported | `setup claude-code` — 10 hooks + statusline |
+| **Claude Code** | Supported | `setup claude-code` — 15 hooks + statusline |
 | **Cursor** | Supported | `setup cursor` — 9 hooks |
-| **MCP** | Built-in | `serve` — 7 tools for agent self-query |
+| **MCP** | Built-in | `serve` — 13 tools for agent self-query |
 | Windsurf, Cline | Planned | — |
 
 <details>
@@ -145,7 +146,8 @@ Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatica
 
 | Version | What changed |
 |---------|-------------|
-| **v0.5.4** | Built-in `roast` command (local coding data analysis) |
+| **v0.6.0** | Transcript Archaeologist — jack.db index, 6 MCP tools, `reindex` CLI, 15 hooks, signature parser |
+| v0.5.4 | Built-in `roast` command (local coding data analysis) |
 | v0.5.3 | Fix setup hang on macOS |
 | v0.5.2 | 10 hook events, Cursor BOM fix, semantic TSA rate limit |
 | v0.5.1 | TSA on by default, Windows install fix |
