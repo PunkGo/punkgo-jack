@@ -379,13 +379,35 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
         });
     }
     if let Some(target_session) = &opts.session {
-        files.retain(|p| p.file_stem().and_then(|s| s.to_str()) == Some(target_session.as_str()));
+        // Codex review fix: the previous filter only kept files whose
+        // stem matched the target session_id, but subagent files are
+        // named `agent-<id>.jsonl` and carry the parent's sessionId
+        // internally. For `--session`, we keep both the parent file
+        // (stem == target) AND any file inside a subdirectory named
+        // after the target session (the `subagents/` folder lives
+        // under `~/.claude/projects/<slug>/<session_id>/`).
+        let target = target_session.as_str();
+        files.retain(|p| {
+            // Direct match: parent file named <session_id>.jsonl
+            if p.file_stem().and_then(|s| s.to_str()) == Some(target) {
+                return true;
+            }
+            // Subagent match: path contains /<session_id>/subagents/
+            let path_str = p.to_string_lossy();
+            path_str.contains(&format!("/{target}/"))
+        });
     }
 
-    // NIT review fix (2026-04-15): both arms were identical — collapsed.
-    // In dry-run mode we still open a real connection for schema init and
-    // lookups, but never commit a write transaction.
-    let mut conn = index::open_jack_db()?;
+    // Codex review fix: dry-run must NOT create jack.db on disk. The
+    // previous version always called open_jack_db() (which runs schema
+    // init with SQLITE_OPEN_CREATE), so `reindex --dry-run` on a fresh
+    // machine would create the DB file despite advertising "no writes".
+    // Fix: only open the DB for the real write path.
+    let mut conn = if !opts.dry_run {
+        Some(index::open_jack_db()?)
+    } else {
+        None
+    };
 
     let total = files.len();
     info!(file_count = total, "reindex starting");
@@ -412,7 +434,10 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
     // a session to materialize.
     //
     // Codex re-verify fix (2026-04-15).
-    let mut deleted_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Maps canonical session_id → next file_index (0 for parent, 1+
+    // for subagents). Used for DELETE dedup AND turn_order tie-breaking.
+    let mut session_file_index: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
 
     for (i, path) in files.iter().enumerate() {
         let records = match TranscriptScanner::scan_file(path) {
@@ -458,8 +483,8 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             // Sessions are counted by canonical session_id, not by file —
             // so multiple subagent files for one parent session count as
             // one session in the report. Use a separate dry-run set.
-            report.sessions_upserted = report.sessions_upserted.max(deleted_sessions.len() + 1);
-            deleted_sessions.insert(session_id.clone());
+            session_file_index.entry(session_id.clone()).or_insert(0);
+            report.sessions_upserted = session_file_index.len();
             report.files_scanned += 1;
             if (i + 1) % 50 == 0 {
                 info!(
@@ -474,8 +499,20 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
         // corrupt accumulated progress, but DELETE only once per session.
         let session_id_for_closure = session_id.clone();
         let path_stem_for_closure = path_stem.clone();
-        let already_deleted = deleted_sessions.contains(&session_id);
+        let already_deleted = session_file_index.contains_key(&session_id);
+        // File index for turn_order tie-breaking across merged files.
+        // Codex review fix #5: per-file byte offsets start at 0, so
+        // merged sessions have colliding turn_order values. We encode
+        // the file sequence number into the high bits:
+        //   turn_order = (file_index << 40) | file_offset
+        // This preserves within-file ordering (byte offset in low 40
+        // bits) while making cross-file ordering deterministic (file
+        // processing order in high 24 bits). 40 bits of offset
+        // supports files up to 1 TB; 24 bits of file index supports
+        // up to ~16M files per session.
+        let file_idx = *session_file_index.entry(session_id.clone()).or_insert(0);
         let tx_result: Result<(usize, usize, HashMap<String, usize>, bool)> = (|| {
+            let conn = conn.as_mut().expect("conn is Some in non-dry-run path");
             let tx = conn.transaction()?;
             let sid = &session_id_for_closure;
 
@@ -498,10 +535,12 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             let mut local_turns = 0usize;
             let mut local_sigs = 0usize;
             let mut local_variants: HashMap<String, usize> = HashMap::new();
-            // turn_order = record.file_offset (the canonical jsonl byte
-            // offset) so this path agrees with Path A on every turn_uuid.
+            // Codex review fix #5: composite turn_order encodes the file
+            // sequence number in the high bits so turns from different
+            // files within the same session don't collide on byte offset.
             for record in &records {
-                upsert_turn_from_record(&tx, record, record.file_offset as i64, None)?;
+                let turn_order = ((file_idx << 40) | record.file_offset) as i64;
+                upsert_turn_from_record(&tx, record, turn_order, None)?;
                 local_turns += 1;
                 for block in &record.content_blocks {
                     if let ContentBlockRecord::Thinking { signature_b64, .. } = block {
@@ -539,11 +578,13 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             Ok((t, s, variants, did_delete)) => {
                 report.turns_upserted += t;
                 report.signatures_upserted += s;
+                // Bump file index for the next file of this session.
+                *session_file_index.entry(session_id.clone()).or_insert(0) += 1;
                 if did_delete {
                     // First time we see this canonical session_id —
                     // count it once toward sessions_upserted.
                     report.sessions_upserted += 1;
-                    deleted_sessions.insert(session_id);
+                    session_file_index.entry(session_id).or_insert(0);
                 }
                 report.files_scanned += 1;
                 for (k, v) in variants {

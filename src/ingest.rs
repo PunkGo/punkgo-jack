@@ -362,9 +362,17 @@ fn dispatch_transcript_scan(event_type: &str, session_id: &str, raw_json: &Value
     if !triggers || session_id == "unknown" {
         return;
     }
+    // Codex review fix: for subagent_stop, Claude Code provides the
+    // finished agent's transcript as `agent_transcript_path`. The
+    // generic `transcript_path` points at the PARENT session's file,
+    // so Path A would scan the wrong file and miss the subagent's
+    // turns until a full reindex. Prefer agent_transcript_path when
+    // present (subagent events); fall back to transcript_path (parent
+    // session events like agent_stop / session_end).
     let transcript_path = raw_json
-        .get("transcript_path")
+        .get("agent_transcript_path")
         .and_then(Value::as_str)
+        .or_else(|| raw_json.get("transcript_path").and_then(Value::as_str))
         .map(String::from);
     let session_id = session_id.to_string();
 

@@ -443,9 +443,31 @@ fn build_prompt_metadata(raw: &Value) -> BTreeMap<String, Value> {
             meta.insert(key.into(), v.clone());
         }
     }
-    // Capture the prompt text.
-    if let Some(v) = raw.get("prompt") {
-        meta.insert("prompt".into(), v.clone());
+    // Codex review fix: previously we inserted the full raw prompt
+    // into meta["prompt"] here, then the UserPromptSubmit arm added
+    // a SECOND copy via externalize_or_inline under meta["prompt_body"].
+    // For large prompts this meant the kernel payload carried the
+    // full text TWICE (once raw, once as blob ref), defeating the
+    // externalization. Fix: only store a short preview in meta["prompt"]
+    // (for backward-compat consumers that read this key); the full
+    // content lives exclusively in meta["prompt_body"] via the blob
+    // helper. Small prompts (< max_inline_bytes) are still fully
+    // inline in prompt_body so no data is lost.
+    if let Some(v) = raw.get("prompt").and_then(Value::as_str) {
+        let preview = if v.len() > 200 {
+            format!(
+                "{}...",
+                &v[..v
+                    .char_indices()
+                    .take_while(|(i, _)| *i < 200)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(200)]
+            )
+        } else {
+            v.to_string()
+        };
+        meta.insert("prompt".into(), json!(preview));
     }
     // Detect images from transcript (hook stdin doesn't include image data,
     // but transcript_path points to a JSONL that contains base64 image blocks).
