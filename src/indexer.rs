@@ -609,35 +609,8 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
 
     report.duration_seconds = started.elapsed().as_secs_f64();
 
-    // Final counts from DB scoped to sessions we actually touched.
-    // Mid-loop counting is wrong: INSERT OR REPLACE on duplicate
-    // turn_uuids (subagent ↔ parent overlap) increments the counter
-    // but doesn't add a row. Codex review: must scope to processed
-    // sessions only so --session/--since don't report the whole table.
-    if let Some(conn) = conn.as_ref() {
-        let touched: Vec<String> = session_file_index.keys().cloned().collect();
-        if !touched.is_empty() {
-            let placeholders: String = touched.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let sql_turns =
-                format!("SELECT COUNT(*) FROM turns WHERE session_id IN ({placeholders})");
-            let sql_sigs = format!(
-                "SELECT COUNT(*) FROM thinking_signatures ts \
-                 WHERE EXISTS (SELECT 1 FROM turns t \
-                 WHERE t.turn_uuid = ts.turn_uuid AND t.session_id IN ({placeholders}))"
-            );
-            let params: Vec<&dyn rusqlite::types::ToSql> = touched
-                .iter()
-                .map(|s| s as &dyn rusqlite::types::ToSql)
-                .collect();
-            if let Ok(n) = conn.query_row(&sql_turns, params.as_slice(), |r| r.get::<_, i64>(0)) {
-                report.turns_upserted = n as usize;
-            }
-            if let Ok(n) = conn.query_row(&sql_sigs, params.as_slice(), |r| r.get::<_, i64>(0)) {
-                report.signatures_upserted = n as usize;
-            }
-            report.sessions_upserted = touched.len();
-        }
-    }
+    // Session count = distinct session_ids we touched.
+    report.sessions_upserted = session_file_index.len();
 
     info!(
         files = report.files_scanned,

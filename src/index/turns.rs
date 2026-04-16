@@ -72,8 +72,20 @@ pub struct TurnRow {
 /// session_id, the new write is silently dropped (the older session
 /// keeps the turn). Same session_id → INSERT OR REPLACE as before
 /// (handles re-scans of the same session correctly).
-/// Returns `true` if the row was written, `false` if fork-skipped.
+/// Returns `true` if a row was actually inserted, `false` if skipped.
+///
+/// Uses INSERT OR IGNORE (not REPLACE). After `run_reindex` DELETEs
+/// all turns for a session, every insert is genuinely new for the
+/// first file. Subagent files sharing the same turn_uuid + session_id
+/// as the parent are silently IGNOREd (duplicate PK, changes()=0).
+/// Forked turns (different session_id) are caught by the pre-check
+/// and return false before reaching the INSERT.
+///
+/// This gives an exact write count: `conn.changes() > 0` is true
+/// only for rows that were actually added to the table.
 pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
+    // Fork-safe: if turn_uuid already belongs to a different session,
+    // the original session keeps it.
     let existing_session: Option<String> = conn
         .query_row(
             "SELECT session_id FROM turns WHERE turn_uuid = ?1",
@@ -84,14 +96,13 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
         .context("looking up existing turn session_id")?;
     if let Some(existing) = existing_session {
         if existing != turn.session_id {
-            // Fork case — original session keeps the turn.
             return Ok(false);
         }
     }
 
     conn.execute(
         r#"
-        INSERT OR REPLACE INTO turns (
+        INSERT OR IGNORE INTO turns (
             turn_uuid, session_id, parent_turn_uuid, turn_order, role, timestamp,
             cwd, git_branch, is_sidechain, slug, claude_code_version,
             request_id, message_id, model, model_variant,
@@ -146,7 +157,7 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
         ],
     )
     .context("upsert_turn")?;
-    Ok(true)
+    Ok(conn.changes() > 0)
 }
 
 fn row_to_turn(row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {
