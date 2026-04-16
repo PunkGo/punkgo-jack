@@ -439,6 +439,12 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
     let mut session_file_index: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
 
+    // Global dedup: track every turn_uuid we've already written in this
+    // reindex run. Skip duplicates at the Rust level so the report
+    // count is always exact. Bypasses any SQLite INSERT OR IGNORE /
+    // changes() subtlety that caused report ≠ DB on some platforms.
+    let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for (i, path) in files.iter().enumerate() {
         let records = match TranscriptScanner::scan_file(path) {
             Ok(r) => r,
@@ -539,6 +545,11 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             // sequence number in the high bits so turns from different
             // files within the same session don't collide on byte offset.
             for record in &records {
+                // Skip if we already wrote this turn_uuid in this
+                // reindex run (parent ↔ subagent overlap).
+                if !seen_uuids.insert(record.turn_uuid.clone()) {
+                    continue; // already seen → skip entirely
+                }
                 let turn_order = ((file_idx << 40) | record.file_offset) as i64;
                 let written = upsert_turn_from_record(&tx, record, turn_order, None)?;
                 if written {
