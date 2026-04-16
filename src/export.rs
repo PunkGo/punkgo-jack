@@ -225,7 +225,13 @@ fn format_markdown(events: &[&Value], session_id: Option<&str>) -> String {
             out.push_str(&format!("  > {content}\n"));
         }
 
-        // Show user prompt text.
+        // Show user prompt text. v0.6.0: the adapter-level truncation
+        // is removed for claude-code events (full content stored via
+        // externalize_or_inline). Cursor adapter still truncates at
+        // the adapter layer. We no longer add a second display-level
+        // cap here — the export shows whatever the metadata contains.
+        // For old pre-v0.6.0 events, the metadata is already truncated
+        // at 200 bytes; for new events it's the full prompt.
         if event_type == "user_prompt" {
             if let Some(prompt) = event
                 .get("payload")
@@ -233,13 +239,7 @@ fn format_markdown(events: &[&Value], session_id: Option<&str>) -> String {
                 .and_then(|m| m.get("prompt"))
                 .and_then(Value::as_str)
             {
-                let display = if prompt.len() > 200 {
-                    let end = truncate_at_char_boundary(prompt, 200);
-                    format!("{end}...")
-                } else {
-                    prompt.to_string()
-                };
-                out.push_str(&format!("  > \"{display}\"\n"));
+                out.push_str(&format!("  > \"{prompt}\"\n"));
             }
         }
     }
@@ -261,17 +261,8 @@ fn format_json(events: &[&Value]) -> Result<String> {
     Ok(serde_json::to_string_pretty(&export)?)
 }
 
-/// Truncate a string to at most `max` bytes at a char boundary.
-fn truncate_at_char_boundary(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
+// truncate_at_char_boundary was removed in v0.6.0 — no longer needed
+// after the export prompt display cap was dropped (plan line 261).
 
 // ---------------------------------------------------------------------------
 // Tests
