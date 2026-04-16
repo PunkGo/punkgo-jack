@@ -622,13 +622,17 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
     report.sessions_upserted = session_file_index.len();
 
     // Overwrite mid-loop counters with actual DB row counts.
-    // Every other approach failed on Mac (INSERT OR IGNORE changes(),
-    // scoped COUNT query, HashSet dedup). This is the nuclear option:
-    // one SELECT COUNT per table, no params, no closures, no subtlety.
+    eprintln!(
+        "[debug] before nuclear COUNT: turns={}, conn.is_some={}",
+        report.turns_upserted,
+        conn.is_some()
+    );
     if let Some(ref conn) = conn {
-        report.turns_upserted = conn
+        let db_turns = conn
             .query_row("SELECT COUNT(*) FROM turns", [], |r| r.get::<_, i64>(0))
-            .unwrap_or(0) as usize;
+            .unwrap_or(-1);
+        eprintln!("[debug] SELECT COUNT(*) FROM turns = {db_turns}");
+        report.turns_upserted = db_turns.max(0) as usize;
         report.signatures_upserted = conn
             .query_row("SELECT COUNT(*) FROM thinking_signatures", [], |r| {
                 r.get::<_, i64>(0)
