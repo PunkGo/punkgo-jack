@@ -56,7 +56,38 @@ pub struct TurnRow {
 
 /// PRIVACY: metadata only, no body text. The caller is responsible for
 /// constructing `content_blocks_meta` without smuggling raw content.
+///
+/// Fork-safe upsert (codex re-verify fix, 2026-04-15): the `turns`
+/// table has `turn_uuid TEXT PRIMARY KEY`, but Claude Code session
+/// forks copy the prefix turns of the parent session into the child
+/// session's jsonl file. Both files reference the same turn_uuid,
+/// and a naive `INSERT OR REPLACE` would assign the row to whichever
+/// session was processed LAST (alphabetic file order), making the
+/// other session "lose" those turns from a `WHERE session_id = ?`
+/// query. Forks are read-only history; the original session owns
+/// the turn.
+///
+/// We preserve first-write-wins semantics across sessions: if a
+/// row with the same turn_uuid already exists under a DIFFERENT
+/// session_id, the new write is silently dropped (the older session
+/// keeps the turn). Same session_id → INSERT OR REPLACE as before
+/// (handles re-scans of the same session correctly).
 pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<()> {
+    let existing_session: Option<String> = conn
+        .query_row(
+            "SELECT session_id FROM turns WHERE turn_uuid = ?1",
+            params![turn.turn_uuid],
+            |r| r.get(0),
+        )
+        .optional()
+        .context("looking up existing turn session_id")?;
+    if let Some(existing) = existing_session {
+        if existing != turn.session_id {
+            // Fork case — original session keeps the turn.
+            return Ok(());
+        }
+    }
+
     conn.execute(
         r#"
         INSERT OR REPLACE INTO turns (

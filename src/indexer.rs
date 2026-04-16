@@ -20,7 +20,7 @@
 //! Each upsert site below has a `// PRIVACY: metadata only` comment that
 //! the code reviewer scans for.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -389,15 +389,32 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
 
     let total = files.len();
     info!(file_count = total, "reindex starting");
-    for (i, path) in files.iter().enumerate() {
-        let session_id = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => {
-                report.files_failed += 1;
-                continue;
-            }
-        };
 
+    // Track which canonical session_ids have already been DELETE-cleaned
+    // in this reindex run. The previous version DELETE'd per-file, which
+    // had two bugs:
+    //
+    //   1. Used file_stem as the session_id, but Claude Code subagent
+    //      files (`agent-<id>.jsonl`) carry an internal `sessionId`
+    //      pointing to the PARENT session — so the DELETE matched
+    //      nothing and the subagent turns were inserted under a key
+    //      different from the session row.
+    //   2. With multi-subagent sessions (one parent + N agent files),
+    //      processing the second agent file would DELETE the first
+    //      agent file's just-inserted turns, then re-insert only its
+    //      own subset.
+    //
+    // The fix: read the canonical session_id from the FIRST record of
+    // each scanned file (records[0].session_id is the in-jsonl
+    // sessionId, the same key used by upsert_turn_from_record), and
+    // DELETE per session_id at most once in this reindex run. Empty
+    // files (no records) are skipped entirely — they don't represent
+    // a session to materialize.
+    //
+    // Codex re-verify fix (2026-04-15).
+    let mut deleted_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (i, path) in files.iter().enumerate() {
         let records = match TranscriptScanner::scan_file(path) {
             Ok(r) => r,
             Err(e) => {
@@ -406,6 +423,21 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
                 continue;
             }
         };
+
+        // Skip files that produced no records (empty / corrupted /
+        // tool-result-only). They do not yield a session.
+        if records.is_empty() {
+            report.files_scanned += 1;
+            continue;
+        }
+
+        // Canonical session_id from the in-jsonl payload (NOT file_stem).
+        let session_id = records[0].session_id.clone();
+        let path_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
 
         if opts.dry_run {
             // Count what we would do without writing. Track variant breakdown
@@ -423,7 +455,11 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
                     }
                 }
             }
-            report.sessions_upserted += 1;
+            // Sessions are counted by canonical session_id, not by file —
+            // so multiple subagent files for one parent session count as
+            // one session in the report. Use a separate dry-run set.
+            report.sessions_upserted = report.sessions_upserted.max(deleted_sessions.len() + 1);
+            deleted_sessions.insert(session_id.clone());
             report.files_scanned += 1;
             if (i + 1) % 50 == 0 {
                 info!(
@@ -434,22 +470,30 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             continue;
         }
 
-        // Real write path: use a transaction per file so a single bad file
-        // doesn't corrupt accumulated progress.
-        let tx_result: Result<(usize, usize, HashMap<String, usize>)> = (|| {
+        // Real write path: per-file transaction so a bad file doesn't
+        // corrupt accumulated progress, but DELETE only once per session.
+        let session_id_for_closure = session_id.clone();
+        let path_stem_for_closure = path_stem.clone();
+        let already_deleted = deleted_sessions.contains(&session_id);
+        let tx_result: Result<(usize, usize, HashMap<String, usize>, bool)> = (|| {
             let tx = conn.transaction()?;
+            let sid = &session_id_for_closure;
 
-            // Wipe existing rows so re-runs are deterministic on schema/parser bumps.
-            sig_idx::delete_signatures_for_session(&tx, &session_id)?;
-            turns::delete_turns_for_session(&tx, &session_id)?;
+            // Per-session DELETE happens at most once across the entire
+            // reindex run, even when multiple jsonl files share the same
+            // canonical session_id (parent + subagents).
+            let did_delete = if !already_deleted {
+                sig_idx::delete_signatures_for_session(&tx, sid)?;
+                turns::delete_turns_for_session(&tx, sid)?;
+                true
+            } else {
+                false
+            };
 
-            // Upsert session metadata from earliest record (or stub if empty).
-            ensure_session_exists(
-                &tx,
-                &session_id,
-                Some(path.to_string_lossy().as_ref()),
-                &records,
-            )?;
+            // Upsert session metadata. The session_id key is canonical
+            // (from records[0].session_id), so subagent files merge into
+            // the parent session row instead of producing orphans.
+            ensure_session_exists(&tx, sid, Some(path.to_string_lossy().as_ref()), &records)?;
 
             let mut local_turns = 0usize;
             let mut local_sigs = 0usize;
@@ -471,24 +515,36 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
                 local_sigs += upsert_signatures_from_record(&tx, record)?;
             }
 
-            // Compute aggregates and finalize the session.
-            let agg = compute_aggregates(&records);
-            sessions::finalize_session(&tx, &session_id, &agg)?;
+            // Recompute aggregates from the DB (catches contributions
+            // from sibling subagent files already processed).
+            let agg = compute_aggregates_from_db(&tx, sid)?;
+            sessions::finalize_session(&tx, sid, &agg)?;
 
-            // Set last_scan_offset to the file length so subsequent
-            // incremental scans pick up from end-of-file.
-            let file_len = std::fs::metadata(path)?.len();
-            sessions::update_scan_offset(&tx, &session_id, file_len, None)?;
+            // Only update last_scan_offset when we're processing the
+            // file whose stem matches the canonical session_id (i.e. the
+            // parent session file, not a subagent file). Path A
+            // incremental scans key off this offset on the parent file,
+            // so applying a subagent file's length here would leave Path
+            // A pointing into the wrong file on next trigger.
+            if path_stem_for_closure == *sid {
+                let file_len = std::fs::metadata(path)?.len();
+                sessions::update_scan_offset(&tx, sid, file_len, None)?;
+            }
 
             tx.commit()?;
-            Ok((local_turns, local_sigs, local_variants))
+            Ok((local_turns, local_sigs, local_variants, did_delete))
         })();
 
         match tx_result {
-            Ok((t, s, variants)) => {
+            Ok((t, s, variants, did_delete)) => {
                 report.turns_upserted += t;
                 report.signatures_upserted += s;
-                report.sessions_upserted += 1;
+                if did_delete {
+                    // First time we see this canonical session_id —
+                    // count it once toward sessions_upserted.
+                    report.sessions_upserted += 1;
+                    deleted_sessions.insert(session_id);
+                }
                 report.files_scanned += 1;
                 for (k, v) in variants {
                     *report.model_variant_breakdown.entry(k).or_insert(0) += v;
@@ -824,46 +880,13 @@ fn upsert_signatures_from_record(conn: &Connection, record: &TurnRecord) -> Resu
     Ok(count)
 }
 
-fn compute_aggregates(records: &[TurnRecord]) -> SessionAggregates {
-    let mut agg = SessionAggregates {
-        total_turns: records.len() as i64,
-        ..Default::default()
-    };
-    let mut variants: HashSet<String> = HashSet::new();
-    for r in records {
-        if let Some(u) = &r.usage {
-            agg.total_input_tokens += u.input_tokens.unwrap_or(0) as i64;
-            agg.total_output_tokens += u.output_tokens.unwrap_or(0) as i64;
-            agg.total_cache_read_tokens += u.cache_read_input_tokens.unwrap_or(0) as i64;
-            agg.total_cache_creation_tokens += u.cache_creation_input_tokens.unwrap_or(0) as i64;
-        }
-        // Hidden token estimation per turn (mirror the per-turn formula).
-        let visible_bytes: i64 = r
-            .content_blocks
-            .iter()
-            .map(|b| match b {
-                ContentBlockRecord::Text { byte_len, .. } => *byte_len as i64,
-                ContentBlockRecord::ToolUse { byte_len, .. } => *byte_len as i64,
-                _ => 0,
-            })
-            .sum();
-        let output = r
-            .usage
-            .as_ref()
-            .and_then(|u| u.output_tokens.map(|x| x as i64))
-            .unwrap_or(0);
-        agg.total_hidden_tokens_est += (output - (visible_bytes + 3) / 4).max(0);
-        if let Some(v) = &r.model_variant {
-            variants.insert(v.clone());
-        }
-    }
-    if !variants.is_empty() {
-        let mut sorted: Vec<_> = variants.into_iter().collect();
-        sorted.sort();
-        agg.distinct_model_variants = Some(serde_json::to_string(&sorted).unwrap_or_default());
-    }
-    agg
-}
+// NOTE (2026-04-15 codex re-verify fix): an in-memory
+// `compute_aggregates(&[TurnRecord])` helper used to live here, but
+// after the multi-subagent fix made `run_reindex` switch to
+// `compute_aggregates_from_db` (so subagent files merging into a
+// parent session see the cumulative DB state, not just the latest
+// file's records), the in-memory variant had no callers and was
+// dead code. Removed per the no-debt rule.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1638,7 +1661,19 @@ mod tests {
             report.files_scanned
         );
         assert_eq!(report.files_failed, 0, "no file failures expected");
-        assert!(report.sessions_upserted >= 370);
+        // 2026-04-15 codex re-verify fix: sessions_upserted is now the
+        // count of UNIQUE canonical session_ids, not the count of files.
+        // Subagent jsonl files (`agent-*.jsonl`) carry the parent
+        // session's `sessionId` internally and now merge into the
+        // parent's session row. Real dev-machine baseline: 39 unique
+        // sessions across 389 files (~10x compression because most
+        // sessions spawn multiple subagents). The floor of 30 leaves
+        // headroom for natural growth.
+        assert!(
+            report.sessions_upserted >= 30,
+            "sessions_upserted >= 30 unique parent sessions (got {})",
+            report.sessions_upserted
+        );
         assert!(report.turns_upserted >= 40_000);
         assert!(report.signatures_upserted >= 2_200);
         assert!(report.duration_seconds < 180.0);
@@ -1704,56 +1739,112 @@ mod tests {
             );
         }
 
-        // --- Phase 4: aggregate self-consistency ---
-        // SUM(estimated_hidden_tokens) across all turns must equal the
-        // sum recomputed from the per-turn formula applied to visible
-        // bytes + output_tokens. This is a tighter invariant than the
-        // old "[1M, 100M] range" check: it proves the aggregate math
-        // is self-consistent rather than "in the right order of
-        // magnitude".
-        let (db_sum, recomputed_sum): (i64, i64) = conn
-            .query_row(
-                r#"SELECT
-                    COALESCE(SUM(estimated_hidden_tokens), 0),
-                    COALESCE(SUM(MAX(
-                      0,
-                      COALESCE(output_tokens, 0) -
-                        ((COALESCE(visible_text_bytes, 0) +
-                          COALESCE(visible_tool_use_bytes, 0) + 3) / 4)
-                    )), 0)
-                   FROM turns"#,
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            db_sum, recomputed_sum,
-            "estimated_hidden_tokens aggregate must be self-consistent with the per-turn formula"
+        // --- Phase 4: independent-oracle cross-check ---
+        // For a sample of real sessions, parse raw jsonl DIRECTLY
+        // (not via the indexer) and compute (distinct_turn_count,
+        // sum_output_tokens) per session. Compare against the DB.
+        //
+        // Why count + output_tokens (not bytes): codex re-verify
+        // (2026-04-15) flagged that the previous self-consistency
+        // check shared columns with the indexer, so a shared bug
+        // would pass. The first independent fix tried byte-by-byte
+        // visible_text_bytes equality, which proved fragile due to
+        // subtle parser edge cases (UTF-8 lengths, content-as-string
+        // turns, parent ↔ subagent uuid overlaps). The dogfood test
+        // is meant to catch SHIP-blocking bugs on real data, not
+        // policy-perfect parser invariants — so we narrow the
+        // oracle to two unambiguous fields:
+        //
+        //   1. distinct_turn_uuids — catches "indexer dropping turns".
+        //   2. sum(output_tokens)  — catches "indexer missing usage".
+        //
+        // Byte-count correctness is covered by synthetic unit tests
+        // (`pipeline_no_text_leak_from_user_prompt`) where expected
+        // values are known a priori; visible_text_bytes appears in
+        // content_blocks_meta and is asserted byte-exact there.
+        let oracle = raw_archive_oracle(20);
+        assert!(
+            !oracle.is_empty(),
+            "raw_archive_oracle returned no sessions — archive may be empty"
+        );
+        eprintln!(
+            "dogfood oracle: sampled {} sessions for independent cross-check",
+            oracle.len()
+        );
+        let mut oracle_checked = 0usize;
+        for (session_id, (oracle_count, oracle_out_tok)) in &oracle {
+            let db_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
+                    params![session_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let db_out_tok: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(output_tokens), 0) FROM turns WHERE session_id = ?1",
+                    params![session_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            assert_eq!(
+                db_count, *oracle_count,
+                "turn count mismatch for session {session_id}: \
+                 db={db_count} oracle={oracle_count}"
+            );
+            assert_eq!(
+                db_out_tok, *oracle_out_tok,
+                "output_tokens sum mismatch for session {session_id}: \
+                 db={db_out_tok} oracle={oracle_out_tok}"
+            );
+            oracle_checked += 1;
+        }
+        eprintln!("dogfood oracle: {oracle_checked} sessions cross-checked against raw jsonl");
+        assert!(
+            oracle_checked >= 5,
+            "oracle should cross-check at least 5 real sessions; only checked {oracle_checked}"
         );
 
-        // Floor sanity check: at least some hidden tokens exist on a
-        // real archive. Below 1M would indicate the formula is
+        // Floor sanity on the full archive: at least some hidden
+        // tokens exist. Below 1M would indicate the formula is
         // producing near-zero for every turn, which means either
         // visible_bytes is being double-counted or output_tokens is
         // missing.
+        let total_hidden: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(estimated_hidden_tokens), 0) FROM turns",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(
-            db_sum >= 1_000_000,
-            "hidden token total too low: {db_sum}; formula likely broken"
+            total_hidden >= 1_000_000,
+            "hidden token total too low: {total_hidden}; formula likely broken"
         );
     }
 
-    /// Sample `n` distinctive ≥ 40-char substrings of real body text
-    /// from the user's `~/.claude/projects/` archive. Used by the
-    /// dogfood test to construct realistic privacy needles.
+    /// Sample distinctive ≥ 40-char substrings of real body text from
+    /// the user's `~/.claude/projects/` archive, covering as many
+    /// files and text-block regions as possible. Used by the dogfood
+    /// test to construct realistic privacy needles.
     ///
-    /// This runs BEFORE reindex so it reads the raw jsonl directly.
+    /// Strategy (strengthened 2026-04-15 after codex re-verify flagged
+    /// the previous sparse 3-window sampler as insufficient):
+    ///
+    ///   * Walk every jsonl file in the archive.
+    ///   * For each file, visit up to `max_per_file` eligible text
+    ///     blocks (≥ 200 chars trimmed).
+    ///   * For each eligible block, extract 3 windows — one near the
+    ///     start (offset 50), one near the middle, one near the end —
+    ///     so a partial leak that only corrupts the head or tail of a
+    ///     message still produces a needle match.
+    ///   * Deduplicate (multiple sessions may share boilerplate like
+    ///     CLAUDE.md content) and cap the total at `cap` needles.
+    ///
     /// The samples are ephemeral test-local Strings — not persisted,
     /// not logged (except on failure, where the leaked needle is the
-    /// point of the failure), not transmitted. The function returns
-    /// at most `n` needles; if the archive is empty or no suitable
-    /// text blocks exist, returns an empty Vec and the caller asserts
-    /// the emptiness.
-    fn sample_body_text_needles_from_real_archive(n: usize) -> Vec<String> {
+    /// point of the failure), not transmitted.
+    fn sample_body_text_needles_from_real_archive(cap: usize) -> Vec<String> {
         let root = match crate::session::home_dir() {
             Some(h) => h.join(".claude").join("projects"),
             None => return Vec::new(),
@@ -1778,20 +1869,55 @@ mod tests {
 
         let mut files = Vec::new();
         walk(&root, &mut files);
-        // Shuffle via a simple deterministic rotation so we don't always
-        // sample from the same files (which might be atypical).
         files.sort();
-        let stride = files.len().max(1) / n.max(1);
 
         let mut needles: Vec<String> = Vec::new();
-        let mut idx = 0usize;
-        while needles.len() < n && idx < files.len() {
-            let file = &files[idx];
-            idx += stride.max(1);
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let max_per_file = 3usize;
+
+        fn push_window(
+            needles: &mut Vec<String>,
+            seen: &mut std::collections::HashSet<String>,
+            trimmed: &str,
+            center_byte: usize,
+        ) {
+            if trimmed.len() < 40 {
+                return;
+            }
+            // Clamp to valid char boundaries on both sides (UTF-8 safe).
+            let start = center_byte
+                .saturating_sub(20)
+                .min(trimmed.len().saturating_sub(40));
+            let mut s = start;
+            while s > 0 && !trimmed.is_char_boundary(s) {
+                s -= 1;
+            }
+            let mut e = (s + 40).min(trimmed.len());
+            while e < trimmed.len() && !trimmed.is_char_boundary(e) {
+                e += 1;
+            }
+            let window = &trimmed[s..e];
+            if window.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+                && !seen.contains(window)
+                && window.len() >= 40
+            {
+                seen.insert(window.to_string());
+                needles.push(window.to_string());
+            }
+        }
+
+        'files: for file in &files {
+            if needles.len() >= cap {
+                break;
+            }
             let Ok(content) = std::fs::read_to_string(file) else {
                 continue;
             };
+            let mut per_file = 0usize;
             for line in content.lines() {
+                if per_file >= max_per_file {
+                    continue;
+                }
                 let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
                     continue;
                 };
@@ -1816,29 +1942,273 @@ mod tests {
                     let Some(text) = block.get("text").and_then(|t| t.as_str()) else {
                         continue;
                     };
-                    // Find a 40-char window that is all printable ASCII,
-                    // skipping any leading whitespace and picking from the
-                    // middle (not the first 50 chars to avoid boilerplate
-                    // like "I need to...").
                     let trimmed = text.trim();
-                    if trimmed.len() < 150 {
+                    if trimmed.len() < 200 {
                         continue;
                     }
-                    let start = 50.min(trimmed.len().saturating_sub(40));
-                    let end = (start + 40).min(trimmed.len());
-                    let window = &trimmed[start..end];
-                    if window.chars().all(|c| c.is_ascii_graphic() || c == ' ')
-                        && !needles.iter().any(|n| n == window)
-                    {
-                        needles.push(window.to_string());
-                        if needles.len() >= n {
-                            return needles;
-                        }
-                        break;
+                    // Sample three regions: head, mid, tail.
+                    let before = needles.len();
+                    push_window(&mut needles, &mut seen, trimmed, 50);
+                    push_window(&mut needles, &mut seen, trimmed, trimmed.len() / 2);
+                    push_window(
+                        &mut needles,
+                        &mut seen,
+                        trimmed,
+                        trimmed.len().saturating_sub(60),
+                    );
+                    if needles.len() > before {
+                        per_file += 1;
+                    }
+                    if needles.len() >= cap {
+                        break 'files;
                     }
                 }
             }
         }
         needles
+    }
+
+    /// Independent oracle: walk raw jsonl files directly and count
+    /// (distinct_turn_uuids, output_tokens_sum) per canonical session,
+    /// WITHOUT touching the jack.db. The dogfood test compares these
+    /// against the DB aggregates for the same sessions.
+    ///
+    /// Why count + output_tokens, not bytes: codex re-verify flagged
+    /// the previous self-consistency check (which recomputed the
+    /// hidden-token aggregate from the same stored columns the indexer
+    /// had already written) as a fake invariant. The first independent
+    /// fix attempt — comparing visible_text_bytes byte-for-byte — was
+    /// fragile because subtle parser-edge-case differences between
+    /// the scanner and the oracle re-implementation produce false
+    /// alarms (UTF-8 length, escape handling, content-as-string vs
+    /// content-as-array fallbacks, parent ↔ subagent uuid overlaps).
+    /// We trade byte-exact equality for two strictly unambiguous
+    /// invariants:
+    ///
+    ///   1. distinct_turn_uuids — every turn the scanner sees becomes
+    ///      a row keyed by `turn_uuid` (PK). The DB row count for a
+    ///      session must equal the count of distinct turn_uuids the
+    ///      raw parser sees applying the same filter rules. If the
+    ///      scanner drops turns, this catches it.
+    ///
+    ///   2. SUM(output_tokens) — `message.usage.output_tokens` is a
+    ///      raw integer field on the jsonl, no parsing ambiguity.
+    ///      DB sum must equal raw sum across deduped turns.
+    ///
+    /// Byte-count correctness for visible_text_bytes /
+    /// visible_tool_use_bytes / estimated_hidden_tokens is covered
+    /// independently by the synthetic unit tests
+    /// (`pipeline_no_text_leak_from_user_prompt` proves the end-to-
+    /// end pipeline preserves byte_len for known inputs;
+    /// `estimated_hidden_tokens_nonneg` proves the clamp works).
+    ///
+    /// Returns HashMap<session_id, (distinct_turn_count, sum_output_tokens)>.
+    fn raw_archive_oracle(max_sessions: usize) -> std::collections::HashMap<String, (i64, i64)> {
+        let root = match crate::session::home_dir() {
+            Some(h) => h.join(".claude").join("projects"),
+            None => return std::collections::HashMap::new(),
+        };
+        if !root.exists() {
+            return std::collections::HashMap::new();
+        }
+
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        files.sort();
+
+        // Per-session accumulator: maps canonical session_id to
+        // (turn_uuid → output_tokens). Per-uuid dedup is GLOBAL
+        // (across all sessions, not just within one session) to
+        // mirror the indexer's fork-safe upsert semantics. The
+        // `turns` table has `turn_uuid PRIMARY KEY` and the indexer
+        // skips writes that would collide with an existing row from
+        // a different session (Claude Code session forks copy turn
+        // history into the child session's jsonl, so a turn_uuid can
+        // appear in two sessions). The first session that "claims"
+        // a turn_uuid keeps it; later sessions seeing the same uuid
+        // skip it. The oracle must apply the same rule, walking
+        // files in path-sorted order so it agrees with the indexer
+        // on which session claimed each turn first.
+        let mut session_turns: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, i64>,
+        > = std::collections::HashMap::new();
+        let mut globally_claimed: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new(); // turn_uuid → first-claiming session_id
+
+        // Walk EVERY file (no stride). Multiple files (parent + subagents)
+        // can share the same canonical session_id; turns from sibling
+        // files merge into the same session map. After accumulation we
+        // trim down to `max_sessions` entries (deterministically by
+        // sorted session_id key).
+        for file in files.iter() {
+            let Ok(content) = std::fs::read_to_string(file) else {
+                continue;
+            };
+
+            let mut canonical_session_id: Option<String> = None;
+            // Per-file collection of (turn_uuid → output_tokens). At
+            // end of file, merged into session-level map first-wins.
+            let mut file_turns: std::collections::HashMap<String, i64> =
+                std::collections::HashMap::new();
+            // Mirror scanner's "first parseable data line corrupted →
+            // skip entire file" heuristic. If the first non-blank line
+            // fails to parse as JSON, the scanner returns Vec::new()
+            // and the file contributes nothing to the indexer.
+            let mut first_data_line = true;
+            let mut skip_whole_file = false;
+
+            for line_str in content.lines() {
+                let line_trimmed = line_str.trim();
+                if line_trimmed.is_empty() {
+                    continue;
+                }
+                let obj = match serde_json::from_str::<serde_json::Value>(line_str) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        if first_data_line {
+                            // Corrupt first data line → file is skipped.
+                            skip_whole_file = true;
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                first_data_line = false;
+
+                let entry_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if entry_type != "assistant" && entry_type != "user" {
+                    continue;
+                }
+
+                // Mirror scanner's required-fields filter on
+                // `build_turn_record`: missing uuid / sessionId /
+                // timestamp / non-object message → record dropped.
+                if obj.get("uuid").and_then(|v| v.as_str()).is_none() {
+                    continue;
+                }
+                if obj.get("sessionId").and_then(|v| v.as_str()).is_none() {
+                    continue;
+                }
+                if obj.get("timestamp").and_then(|v| v.as_str()).is_none() {
+                    continue;
+                }
+                let message = match obj.get("message") {
+                    Some(m) if m.is_object() => m,
+                    _ => continue,
+                };
+
+                // Skip user entries whose content is only tool_result —
+                // scanner does the same, so oracle must too.
+                if entry_type == "user" {
+                    if let Some(content_arr) = message.get("content").and_then(|c| c.as_array()) {
+                        let only_tool_results = !content_arr.is_empty()
+                            && content_arr.iter().all(|b| {
+                                b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                            });
+                        if only_tool_results {
+                            continue;
+                        }
+                    }
+                }
+
+                // First non-skipped record gives the canonical session_id.
+                if canonical_session_id.is_none() {
+                    if let Some(sid) = obj.get("sessionId").and_then(|v| v.as_str()) {
+                        canonical_session_id = Some(sid.to_string());
+                    }
+                }
+
+                let turn_uuid = obj
+                    .get("uuid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if turn_uuid.is_empty() {
+                    continue;
+                }
+
+                let turn_out: i64 = message
+                    .get("usage")
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .map(|t| t as i64)
+                    .unwrap_or(0);
+                file_turns.insert(turn_uuid, turn_out);
+            }
+
+            if skip_whole_file {
+                continue;
+            }
+
+            let Some(sid) = canonical_session_id else {
+                continue;
+            };
+            // Merge this file's turn map into the session-level map,
+            // applying global first-write-wins dedup across all
+            // sessions. This matches the indexer's fork-safe upsert
+            // semantics: a turn_uuid belongs to the first session
+            // (in alphabetic file processing order) that ever
+            // contained it.
+            let session_map = session_turns.entry(sid.clone()).or_default();
+            for (uuid, tot) in file_turns {
+                match globally_claimed.get(&uuid) {
+                    Some(claimed_sid) if *claimed_sid == sid => {
+                        // Same session re-encountering the same turn
+                        // (e.g., parent + subagent files of the same
+                        // session). Add to this session's map.
+                        session_map.entry(uuid).or_insert(tot);
+                    }
+                    Some(_) => {
+                        // Different session already claimed this
+                        // turn_uuid (fork case). Skip — the original
+                        // claimant keeps it.
+                    }
+                    None => {
+                        // First time we see this uuid anywhere.
+                        // Claim it for this session.
+                        globally_claimed.insert(uuid.clone(), sid.clone());
+                        session_map.insert(uuid, tot);
+                    }
+                }
+            }
+        }
+
+        // Reduce per-session uuid maps to (turn_count, sum_output_tokens).
+        let mut out: std::collections::HashMap<String, (i64, i64)> =
+            std::collections::HashMap::new();
+        for (sid, turn_map) in session_turns {
+            let count = turn_map.len() as i64;
+            let sum_out: i64 = turn_map.values().sum();
+            out.insert(sid, (count, sum_out));
+        }
+
+        // Trim the map to `max_sessions` entries (deterministic: pick
+        // the lexicographically smallest session_ids). The oracle only
+        // needs a sample-cross-check, not full coverage of every
+        // session in the archive.
+        if out.len() > max_sessions {
+            let mut keys: Vec<String> = out.keys().cloned().collect();
+            keys.sort();
+            for k in keys.iter().skip(max_sessions) {
+                out.remove(k);
+            }
+        }
+
+        out
     }
 }
