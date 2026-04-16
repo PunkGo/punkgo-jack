@@ -4,6 +4,19 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [0.6.1] - 2026-04-16
+
+Accuracy and correctness fixes for the transcript indexer. **Recommended upgrade from 0.6.0.**
+
+### Fixed
+
+- **Reindex report now matches reality** — `turns_upserted` shows actual DB rows, not attempted writes. `--session` and `--since` report only the sessions you asked for, not the whole table.
+- **Subagent turns indexed on hook fire** — `subagent_stop` now scans the subagent's own transcript file instead of the parent's. No more waiting for a full reindex to pick up subagent turns.
+- **`reindex --session` finds subagent files** — previously only matched the parent file by name and missed all `agent-*.jsonl` files in the session's subdirectory.
+- **Stable turn ordering across merged files** — parent and subagent turns within the same session no longer collide on sort order.
+- **`reindex --dry-run` is truly read-only** — no longer creates `jack.db` as a side effect.
+- **Prompt metadata cleaned up** — large prompts stored once (blob), not twice (raw + blob). Export shows full prompts for claude-code events instead of truncating to 200 bytes.
+
 ## [0.6.0] - 2026-04-16
 
 **The Transcript Archaeologist.** Jack learns to read Claude Code's local transcript archive and build a searchable index of every turn, every thinking signature, every redacted token.
