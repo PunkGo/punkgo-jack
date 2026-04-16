@@ -255,7 +255,7 @@ fn process_pending_scan(
     // jsonl byte offset so Path A (here) and Path B (full reindex below)
     // produce identical values for the same turn_uuid. No per-path counter.
     for record in &records {
-        upsert_turn_from_record(&tx, record, record.file_offset as i64, None)?;
+        let _ = upsert_turn_from_record(&tx, record, record.file_offset as i64, None)?;
         upsert_signatures_from_record(&tx, record)?;
     }
 
@@ -540,8 +540,10 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             // files within the same session don't collide on byte offset.
             for record in &records {
                 let turn_order = ((file_idx << 40) | record.file_offset) as i64;
-                upsert_turn_from_record(&tx, record, turn_order, None)?;
-                local_turns += 1;
+                let written = upsert_turn_from_record(&tx, record, turn_order, None)?;
+                if written {
+                    local_turns += 1;
+                }
                 for block in &record.content_blocks {
                     if let ContentBlockRecord::Thinking { signature_b64, .. } = block {
                         if let Ok(meta) = parse_thinking_signature(signature_b64) {
@@ -813,12 +815,14 @@ fn build_content_blocks_meta(record: &TurnRecord) -> String {
     serde_json::Value::Array(arr).to_string()
 }
 
+/// Returns `true` if the turn was actually written, `false` if skipped
+/// (fork-safe dedup: turn_uuid already belongs to a different session).
 fn upsert_turn_from_record(
     conn: &Connection,
     record: &TurnRecord,
     turn_order: i64,
     kernel_event_id: Option<String>,
-) -> Result<()> {
+) -> Result<bool> {
     let usage = record.usage.as_ref();
     let visible_text_bytes: i64 = record
         .content_blocks
@@ -884,7 +888,7 @@ fn upsert_turn_from_record(
         scanned_at: now_iso(),
     };
     // PRIVACY: metadata only, no body text.
-    turns::upsert_turn(conn, &row)
+    turns::upsert_turn(conn, &row) // returns true if written, false if fork-skipped
 }
 
 fn upsert_signatures_from_record(conn: &Connection, record: &TurnRecord) -> Result<usize> {

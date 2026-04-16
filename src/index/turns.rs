@@ -72,7 +72,8 @@ pub struct TurnRow {
 /// session_id, the new write is silently dropped (the older session
 /// keeps the turn). Same session_id → INSERT OR REPLACE as before
 /// (handles re-scans of the same session correctly).
-pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<()> {
+/// Returns `true` if the row was written, `false` if fork-skipped.
+pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
     let existing_session: Option<String> = conn
         .query_row(
             "SELECT session_id FROM turns WHERE turn_uuid = ?1",
@@ -84,7 +85,7 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<()> {
     if let Some(existing) = existing_session {
         if existing != turn.session_id {
             // Fork case — original session keeps the turn.
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -145,7 +146,7 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<()> {
         ],
     )
     .context("upsert_turn")?;
-    Ok(())
+    Ok(true)
 }
 
 fn row_to_turn(row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {
