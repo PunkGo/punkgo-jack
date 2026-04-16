@@ -608,6 +608,37 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
     }
 
     report.duration_seconds = started.elapsed().as_secs_f64();
+
+    // Final counts from DB scoped to sessions we actually touched.
+    // Mid-loop counting is wrong: INSERT OR REPLACE on duplicate
+    // turn_uuids (subagent ↔ parent overlap) increments the counter
+    // but doesn't add a row. Codex review: must scope to processed
+    // sessions only so --session/--since don't report the whole table.
+    if let Some(conn) = conn.as_ref() {
+        let touched: Vec<String> = session_file_index.keys().cloned().collect();
+        if !touched.is_empty() {
+            let placeholders: String = touched.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql_turns =
+                format!("SELECT COUNT(*) FROM turns WHERE session_id IN ({placeholders})");
+            let sql_sigs = format!(
+                "SELECT COUNT(*) FROM thinking_signatures ts \
+                 WHERE EXISTS (SELECT 1 FROM turns t \
+                 WHERE t.turn_uuid = ts.turn_uuid AND t.session_id IN ({placeholders}))"
+            );
+            let params: Vec<&dyn rusqlite::types::ToSql> = touched
+                .iter()
+                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .collect();
+            if let Ok(n) = conn.query_row(&sql_turns, params.as_slice(), |r| r.get::<_, i64>(0)) {
+                report.turns_upserted = n as usize;
+            }
+            if let Ok(n) = conn.query_row(&sql_sigs, params.as_slice(), |r| r.get::<_, i64>(0)) {
+                report.signatures_upserted = n as usize;
+            }
+            report.sessions_upserted = touched.len();
+        }
+    }
+
     info!(
         files = report.files_scanned,
         failed = report.files_failed,
@@ -1719,8 +1750,15 @@ mod tests {
             "sessions_upserted >= 30 unique parent sessions (got {})",
             report.sessions_upserted
         );
-        assert!(report.turns_upserted >= 40_000);
-        assert!(report.signatures_upserted >= 2_200);
+        // Floors lowered: report now shows actual DB rows, not attempted
+        // upserts. Old 44k included fork/subagent duplicates that
+        // INSERT OR REPLACE overwrote without adding rows.
+        assert!(
+            report.turns_upserted >= 20_000,
+            "turns {} < 20k floor",
+            report.turns_upserted
+        );
+        assert!(report.signatures_upserted >= 900);
         assert!(report.duration_seconds < 180.0);
 
         // Variant breakdown thresholds.
