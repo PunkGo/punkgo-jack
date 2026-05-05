@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>jack viewer · ~/.punkgo/state</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-1: #101010;
+    --bg-2: #161616;
+    --fg: #d0d0d0;
+    --dim: #555;
+    --mid: #888;
+    --line: #1e1e1e;
+    --line-2: #2a2a2a;
+    --accent: #7fff9b;
+    --hex: #d4a464;
+    --warn: #ff6b6b;
+    --cyan: #60d0e0;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); }
+  body {
+    color: var(--fg);
+    font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+
+  /* ─── Top bar ─── */
+  header {
+    border-bottom: 1px solid var(--line-2);
+    padding: 14px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .brand {
+    font-weight: 500;
+    letter-spacing: 0.3px;
+  }
+  .brand b { color: var(--accent); }
+  .brand span.ver { color: var(--dim); margin-left: 10px; }
+  .brand span.path { color: var(--hex); margin-left: 18px; }
+
+  .status {
+    font-size: 10px;
+    color: var(--mid);
+    display: flex;
+    gap: 18px;
+  }
+  .status .dot::before {
+    content: '●';
+    color: var(--accent);
+    margin-right: 6px;
+    animation: pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* ─── Terminal strip ─── */
+  .term {
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--line-2);
+    background: var(--bg-1);
+    font-size: 11px;
+    color: var(--mid);
+  }
+  .term .prompt { color: var(--accent); }
+  .term .flag { color: var(--hex); }
+  .term .line { display: block; }
+  .term .line .tag { color: var(--dim); }
+
+  /* ─── Stat bar ─── */
+  .bar {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border-bottom: 1px solid var(--line-2);
+  }
+  .stat {
+    padding: 18px 22px;
+    border-right: 1px solid var(--line-2);
+  }
+  .stat:last-child { border-right: none; }
+  .stat .lbl {
+    color: var(--dim);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+  }
+  .stat .val {
+    font-size: 24px;
+    margin-top: 6px;
+    font-weight: 300;
+    color: var(--fg);
+  }
+  .stat .val.accent { color: var(--accent); }
+  .stat .val.hex { color: var(--hex); }
+  .stat .sub {
+    font-size: 9px;
+    color: var(--dim);
+    margin-top: 3px;
+    letter-spacing: 0.3px;
+  }
+
+  /* ─── Main grid ─── */
+  main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  section {
+    border-right: 1px solid var(--line-2);
+    border-bottom: 1px solid var(--line-2);
+    padding: 22px 24px 26px;
+  }
+  section:last-child { border-right: none; }
+
+  .sec-head {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.6px;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .sec-title {
+    font-size: 15px;
+    color: var(--fg);
+    font-weight: 400;
+    margin-bottom: 2px;
+  }
+  .sec-title b { color: var(--accent); }
+  .sec-desc {
+    font-size: 10px;
+    color: var(--dim);
+    margin-bottom: 22px;
+    letter-spacing: 0.2px;
+  }
+
+  /* ─── Merkle SVG ─── */
+  svg.viz { width: 100%; display: block; }
+  .merkle line {
+    stroke: #2e2e2e;
+    stroke-width: 1;
+  }
+  .merkle circle {
+    fill: var(--bg-1);
+    stroke: var(--mid);
+    stroke-width: 1;
+  }
+  .merkle circle.root {
+    stroke: var(--accent);
+    fill: #0f1a11;
+    stroke-width: 1.6;
+    filter: drop-shadow(0 0 6px rgba(127,255,155,0.35));
+  }
+  .merkle circle.l1 { stroke: var(--cyan); }
+  .merkle circle.leaf { stroke: var(--hex); }
+  .merkle text { font-family: 'JetBrains Mono', monospace; font-size: 9px; text-anchor: middle; }
+  .merkle text.hash { fill: var(--hex); }
+  .merkle text.hash.root { fill: var(--accent); font-size: 10px; }
+  .merkle text.hash.l1 { fill: var(--cyan); }
+  .merkle text.lbl { fill: var(--dim); font-size: 8px; }
+  .merkle text.tag { fill: var(--mid); font-size: 8px; letter-spacing: 0.5px; }
+
+  /* ─── Checkpoint list ─── */
+  .ckpts {
+    margin-top: 20px;
+    border-top: 1px solid var(--line-2);
+    padding-top: 16px;
+  }
+  .ckpts-head {
+    display: grid;
+    grid-template-columns: 40px 1fr 90px 80px;
+    gap: 12px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
+  .ckpt {
+    display: grid;
+    grid-template-columns: 40px 1fr 90px 80px;
+    gap: 12px;
+    padding: 6px 8px;
+    font-size: 10px;
+    border-bottom: 1px dashed var(--line);
+  }
+  .ckpt:hover { background: var(--bg-1); }
+  .ckpt:last-child { border-bottom: none; }
+  .ckpt .idx { color: var(--mid); }
+  .ckpt .root { color: var(--hex); overflow: hidden; text-overflow: ellipsis; }
+  .ckpt .ts { color: var(--dim); font-size: 9px; }
+  .ckpt .sig { color: var(--accent); font-size: 9px; }
+
+  /* ─── Anchor map ─── */
+  .anchor .axis {
+    stroke: #2a2a2a;
+    stroke-width: 1;
+  }
+  .anchor text.tick { fill: var(--dim); font-size: 8px; font-family: 'JetBrains Mono', monospace; }
+  .anchor text.lane { fill: var(--mid); font-size: 9px; font-family: 'JetBrains Mono', monospace; }
+  .anchor .lane-line {
+    stroke: #1a1a1a;
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
+  }
+  .anchor circle.evt { fill: var(--fg); }
+  .anchor circle.evt.cursor { fill: var(--cyan); }
+  .anchor circle.anch {
+    fill: var(--accent);
+    filter: drop-shadow(0 0 6px rgba(127,255,155,0.6));
+  }
+  .anchor line.anch-line {
+    stroke: var(--accent);
+    stroke-width: 1;
+    stroke-dasharray: 1 3;
+    opacity: 0.35;
+  }
+  .anchor text.anch-lbl { fill: var(--accent); font-size: 8px; font-family: 'JetBrains Mono', monospace; }
+
+  /* ─── Event log ─── */
+  .log {
+    margin-top: 20px;
+    border-top: 1px solid var(--line-2);
+    padding-top: 16px;
+  }
+  .log-head, .log-row {
+    display: grid;
+    grid-template-columns: 72px 90px 1fr 120px 20px;
+    gap: 12px;
+    padding: 5px 8px;
+    font-size: 10px;
+  }
+  .log-head {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
+  .log-row { border-bottom: 1px dashed var(--line); }
+  .log-row:last-child { border-bottom: none; }
+  .log-row:hover { background: var(--bg-1); }
+  .log-row .ts { color: var(--dim); }
+  .log-row .actor { color: var(--accent); }
+  .log-row .actor.cur { color: var(--cyan); }
+  .log-row .tool { color: var(--fg); }
+  .log-row .hash { color: var(--hex); font-size: 9px; letter-spacing: 0.3px; }
+  .log-row .ok { color: var(--accent); font-size: 11px; text-align: center; }
+
+  /* ─── Bottom bar ─── */
+  footer {
+    padding: 14px 24px;
+    color: var(--dim);
+    font-size: 9px;
+    display: flex;
+    justify-content: space-between;
+    letter-spacing: 0.3px;
+    border-top: 1px solid var(--line-2);
+  }
+  footer .mono { font-family: 'JetBrains Mono', monospace; }
+  footer .mono b { color: var(--hex); font-weight: 400; }
+
+  .demo-tag {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    background: #1a1a1a;
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    padding: 3px 8px;
+    font-size: 9px;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+    .bar { grid-template-columns: repeat(2, 1fr); }
+    .stat { border-bottom: 1px solid var(--line-2); }
+  }
+</style>
+</head>
+<body>
+
+<div class="demo-tag">mock · design demo</div>
+
+<header>
+  <div class="brand">
+    <b>punkgo-jack</b> viewer<span class="ver">v0.5.4 · build 2026.04.15</span>
+    <span class="path">~/.punkgo/state/</span>
+  </div>
+  <div class="status">
+    <span class="dot">kernel connected</span>
+    <span>ipc: /run/user/1000/punkgo-jack.sock</span>
+    <span>pid 28471</span>
+  </div>
+</header>
+
+<div class="term">
+  <span class="line"><span class="prompt">$</span> punkgo-jack viewer <span class="flag">--port 8765 --state ~/.punkgo/state</span></span>
+  <span class="line"><span class="tag">[viewer]</span> loaded kernel snapshot · 4217 events · 128 checkpoints · 128 tsa anchors</span>
+  <span class="line"><span class="tag">[viewer]</span> merkle root verified · ed25519 signature ok · no gaps detected</span>
+  <span class="line"><span class="tag">[viewer]</span> serving at <a>http://localhost:8765</a> — press q to quit</span>
+</div>
+
+<div class="bar">
+  <div class="stat">
+    <div class="lbl">total actions</div>
+    <div class="val">4,217</div>
+    <div class="sub">+ 63 past 24h</div>
+  </div>
+  <div class="stat">
+    <div class="lbl">checkpoints</div>
+    <div class="val">128</div>
+    <div class="sub">tree size 4096 · depth 12</div>
+  </div>
+  <div class="stat">
+    <div class="lbl">tsa anchors</div>
+    <div class="val accent">128 / 128</div>
+    <div class="sub">100% anchored · freetsa.org</div>
+  </div>
+  <div class="stat">
+    <div class="lbl">energy</div>
+    <div class="val hex">842 / 1000</div>
+    <div class="sub">hold: 34 reserved · 0 expired</div>
+  </div>
+  <div class="stat">
+    <div class="lbl">identity</div>
+    <div class="val" style="font-size:13px;letter-spacing:0.4px;margin-top:8px;">ed25519:a3f1…b7c2</div>
+    <div class="sub">actor key · rotated 11d ago</div>
+  </div>
+</div>
+
+<main>
+
+<!-- ══════════ LEFT · DIRECTION A · MERKLE FOREST ══════════ -->
+<section>
+  <div class="sec-head">DIRECTION A</div>
+  <div class="sec-title"><b>merkle forest</b> · checkpoint #127</div>
+  <div class="sec-desc">proof of existence for 4,217 ai actions · one cryptographic root</div>
+
+  <svg class="viz merkle" viewBox="0 0 600 290">
+    <!-- Edges -->
+    <g>
+      <line x1="300" y1="46" x2="150" y2="104"/>
+      <line x1="300" y1="46" x2="450" y2="104"/>
+      <line x1="150" y1="104" x2="78"  y2="162"/>
+      <line x1="150" y1="104" x2="222" y2="162"/>
+      <line x1="450" y1="104" x2="378" y2="162"/>
+      <line x1="450" y1="104" x2="522" y2="162"/>
+      <line x1="78"  y1="162" x2="40"  y2="222"/>
+      <line x1="78"  y1="162" x2="116" y2="222"/>
+      <line x1="222" y1="162" x2="184" y2="222"/>
+      <line x1="222" y1="162" x2="260" y2="222"/>
+      <line x1="378" y1="162" x2="340" y2="222"/>
+      <line x1="378" y1="162" x2="416" y2="222"/>
+      <line x1="522" y1="162" x2="484" y2="222"/>
+      <line x1="522" y1="162" x2="560" y2="222"/>
+    </g>
+
+    <!-- Root -->
+    <text x="300" y="26" class="tag">ROOT · ed25519 signed</text>
+    <circle class="root" cx="300" cy="46" r="11"/>
+    <text x="300" y="50" class="hash root">c4f8e1</text>
+
+    <!-- L1 -->
+    <circle class="l1" cx="150" cy="104" r="7.5"/>
+    <text x="150" y="124" class="hash l1">9a3b2f</text>
+    <circle class="l1" cx="450" cy="104" r="7.5"/>
+    <text x="450" y="124" class="hash l1">7e5d1c</text>
+
+    <!-- L2 -->
+    <circle cx="78"  cy="162" r="6"/>
+    <text x="78"  y="180" class="hash">2f1a</text>
+    <circle cx="222" cy="162" r="6"/>
+    <text x="222" y="180" class="hash">b4c7</text>
+    <circle cx="378" cy="162" r="6"/>
+    <text x="378" y="180" class="hash">e5a2</text>
+    <circle cx="522" cy="162" r="6"/>
+    <text x="522" y="180" class="hash">d13f</text>
+
+    <!-- Leaves -->
+    <circle class="leaf" cx="40"  cy="222" r="5"/>
+    <text x="40"  y="244" class="lbl">PreToolUse</text>
+    <text x="40"  y="255" class="lbl">Edit</text>
+
+    <circle class="leaf" cx="116" cy="222" r="5"/>
+    <text x="116" y="244" class="lbl">PostToolUse</text>
+    <text x="116" y="255" class="lbl">Edit ok</text>
+
+    <circle class="leaf" cx="184" cy="222" r="5"/>
+    <text x="184" y="244" class="lbl">PreToolUse</text>
+    <text x="184" y="255" class="lbl">Bash</text>
+
+    <circle class="leaf" cx="260" cy="222" r="5"/>
+    <text x="260" y="244" class="lbl">PostToolUse</text>
+    <text x="260" y="255" class="lbl">Bash ok</text>
+
+    <circle class="leaf" cx="340" cy="222" r="5"/>
+    <text x="340" y="244" class="lbl">SessionStart</text>
+    <text x="340" y="255" class="lbl">cursor</text>
+
+    <circle class="leaf" cx="416" cy="222" r="5"/>
+    <text x="416" y="244" class="lbl">UserPrompt</text>
+    <text x="416" y="255" class="lbl">redact</text>
+
+    <circle class="leaf" cx="484" cy="222" r="5"/>
+    <text x="484" y="244" class="lbl">PreToolUse</text>
+    <text x="484" y="255" class="lbl">Grep</text>
+
+    <circle class="leaf" cx="560" cy="222" r="5"/>
+    <text x="560" y="244" class="lbl">SessionEnd</text>
+    <text x="560" y="255" class="lbl">claude</text>
+
+    <text x="300" y="283" class="tag">— 8 of 4217 leaves shown · full tree on click —</text>
+  </svg>
+
+  <div class="ckpts">
+    <div class="ckpts-head">
+      <span>#</span><span>merkle root</span><span>tsa</span><span>time</span>
+    </div>
+    <div class="ckpt">
+      <span class="idx">#127</span>
+      <span class="root">c4f8e19a3b2f7e5d1c2a6b448e0f12d3…</span>
+      <span class="sig">✓ anchored</span>
+      <span class="ts">14:32:08Z</span>
+    </div>
+    <div class="ckpt">
+      <span class="idx">#126</span>
+      <span class="root">a12d7733c8e48f0b2d1e7c9aa6021e55…</span>
+      <span class="sig">✓ anchored</span>
+      <span class="ts">14:28:55Z</span>
+    </div>
+    <div class="ckpt">
+      <span class="idx">#125</span>
+      <span class="root">48fe01b7a3d6c2e9f15d48ab73e20c11…</span>
+      <span class="sig">✓ anchored</span>
+      <span class="ts">14:25:41Z</span>
+    </div>
+    <div class="ckpt">
+      <span class="idx">#124</span>
+      <span class="root">ee7c2251489a0d6f3b927337c1ba8be0…</span>
+      <span class="sig">✓ anchored</span>
+      <span class="ts">14:22:13Z</span>
+    </div>
+    <div class="ckpt">
+      <span class="idx">#123</span>
+      <span class="root">8b110f6e49d2c5a3f78d1b6c0e239ab4…</span>
+      <span class="sig">✓ anchored</span>
+      <span class="ts">14:18:02Z</span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ RIGHT · DIRECTION B · TSA ANCHOR MAP ══════════ -->
+<section>
+  <div class="sec-head">DIRECTION B</div>
+  <div class="sec-title"><b>tsa anchor map</b> · past 6 hours</div>
+  <div class="sec-desc">each ★ is a rfc3161 timestamp — pinning your ai to real physical time</div>
+
+  <svg class="viz anchor" viewBox="0 0 600 290">
+    <!-- Frame -->
+    <line class="axis" x1="108" y1="42" x2="108" y2="250"/>
+    <line class="axis" x1="108" y1="250" x2="582" y2="250"/>
+
+    <!-- X ticks -->
+    <g>
+      <line class="axis" x1="108" y1="250" x2="108" y2="256"/>
+      <text x="108" y="268" class="tick" text-anchor="middle">08:00</text>
+      <line class="axis" x1="203" y1="250" x2="203" y2="256"/>
+      <text x="203" y="268" class="tick" text-anchor="middle">09:00</text>
+      <line class="axis" x1="298" y1="250" x2="298" y2="256"/>
+      <text x="298" y="268" class="tick" text-anchor="middle">10:00</text>
+      <line class="axis" x1="393" y1="250" x2="393" y2="256"/>
+      <text x="393" y="268" class="tick" text-anchor="middle">11:00</text>
+      <line class="axis" x1="488" y1="250" x2="488" y2="256"/>
+      <text x="488" y="268" class="tick" text-anchor="middle">12:00</text>
+      <line class="axis" x1="582" y1="250" x2="582" y2="256"/>
+      <text x="582" y="268" class="tick" text-anchor="middle">13:00</text>
+    </g>
+    <text x="582" y="283" class="tick" text-anchor="end">wall clock · utc</text>
+
+    <!-- Session lanes -->
+    <g>
+      <text x="100" y="76"  class="lane" text-anchor="end">claude-code/s7a</text>
+      <line class="lane-line" x1="108" y1="72"  x2="582" y2="72"/>
+      <text x="100" y="118" class="lane" text-anchor="end">cursor/s3e</text>
+      <line class="lane-line" x1="108" y1="114" x2="582" y2="114"/>
+      <text x="100" y="160" class="lane" text-anchor="end">claude-code/s8b</text>
+      <line class="lane-line" x1="108" y1="156" x2="582" y2="156"/>
+      <text x="100" y="202" class="lane" text-anchor="end">jack-daemon</text>
+      <line class="lane-line" x1="108" y1="198" x2="582" y2="198"/>
+    </g>
+
+    <!-- Lane 1: claude-code/s7a events (green) -->
+    <g>
+      <circle class="evt" cx="122" cy="72" r="2"/>
+      <circle class="evt" cx="136" cy="72" r="2"/>
+      <circle class="evt" cx="151" cy="72" r="2"/>
+      <circle class="evt" cx="168" cy="72" r="2"/>
+      <circle class="evt" cx="184" cy="72" r="2"/>
+      <circle class="evt" cx="196" cy="72" r="2"/>
+      <circle class="evt" cx="218" cy="72" r="2"/>
+      <circle class="evt" cx="246" cy="72" r="2"/>
+      <circle class="evt" cx="272" cy="72" r="2"/>
+      <circle class="evt" cx="294" cy="72" r="2"/>
+      <circle class="evt" cx="315" cy="72" r="2"/>
+      <circle class="evt" cx="344" cy="72" r="2"/>
+      <circle class="evt" cx="368" cy="72" r="2"/>
+      <circle class="evt" cx="396" cy="72" r="2"/>
+      <circle class="evt" cx="420" cy="72" r="2"/>
+      <circle class="evt" cx="454" cy="72" r="2"/>
+      <circle class="evt" cx="478" cy="72" r="2"/>
+      <circle class="evt" cx="512" cy="72" r="2"/>
+      <circle class="evt" cx="540" cy="72" r="2"/>
+      <circle class="evt" cx="566" cy="72" r="2"/>
+    </g>
+
+    <!-- Lane 2: cursor/s3e (cyan) -->
+    <g>
+      <circle class="evt cursor" cx="192" cy="114" r="2"/>
+      <circle class="evt cursor" cx="224" cy="114" r="2"/>
+      <circle class="evt cursor" cx="258" cy="114" r="2"/>
+      <circle class="evt cursor" cx="276" cy="114" r="2"/>
+      <circle class="evt cursor" cx="302" cy="114" r="2"/>
+      <circle class="evt cursor" cx="335" cy="114" r="2"/>
+      <circle class="evt cursor" cx="362" cy="114" r="2"/>
+    </g>
+
+    <!-- Lane 3: claude-code/s8b -->
+    <g>
+      <circle class="evt" cx="385" cy="156" r="2"/>
+      <circle class="evt" cx="406" cy="156" r="2"/>
+      <circle class="evt" cx="428" cy="156" r="2"/>
+      <circle class="evt" cx="450" cy="156" r="2"/>
+      <circle class="evt" cx="472" cy="156" r="2"/>
+      <circle class="evt" cx="495" cy="156" r="2"/>
+      <circle class="evt" cx="518" cy="156" r="2"/>
+      <circle class="evt" cx="540" cy="156" r="2"/>
+      <circle class="evt" cx="562" cy="156" r="2"/>
+    </g>
+
+    <!-- Lane 4: jack-daemon heartbeat (sparse) -->
+    <g>
+      <circle class="evt" cx="155" cy="198" r="1.6"/>
+      <circle class="evt" cx="238" cy="198" r="1.6"/>
+      <circle class="evt" cx="324" cy="198" r="1.6"/>
+      <circle class="evt" cx="410" cy="198" r="1.6"/>
+      <circle class="evt" cx="496" cy="198" r="1.6"/>
+      <circle class="evt" cx="576" cy="198" r="1.6"/>
+    </g>
+
+    <!-- TSA anchors (stars + dashed nails through all lanes) -->
+    <g>
+      <line class="anch-line" x1="176" y1="42" x2="176" y2="250"/>
+      <circle class="anch" cx="176" cy="42" r="3.5"/>
+      <text x="176" y="35" class="anch-lbl" text-anchor="middle">★</text>
+
+      <line class="anch-line" x1="266" y1="42" x2="266" y2="250"/>
+      <circle class="anch" cx="266" cy="42" r="3.5"/>
+      <text x="266" y="35" class="anch-lbl" text-anchor="middle">★</text>
+
+      <line class="anch-line" x1="348" y1="42" x2="348" y2="250"/>
+      <circle class="anch" cx="348" cy="42" r="3.5"/>
+      <text x="348" y="35" class="anch-lbl" text-anchor="middle">★</text>
+
+      <line class="anch-line" x1="434" y1="42" x2="434" y2="250"/>
+      <circle class="anch" cx="434" cy="42" r="3.5"/>
+      <text x="434" y="35" class="anch-lbl" text-anchor="middle">★</text>
+
+      <line class="anch-line" x1="528" y1="42" x2="528" y2="250"/>
+      <circle class="anch" cx="528" cy="42" r="3.5"/>
+      <text x="528" y="35" class="anch-lbl" text-anchor="middle">★</text>
+
+      <line class="anch-line" x1="572" y1="42" x2="572" y2="250"/>
+      <circle class="anch" cx="572" cy="42" r="3.5"/>
+      <text x="572" y="35" class="anch-lbl" text-anchor="middle">★</text>
+    </g>
+  </svg>
+
+  <div class="log">
+    <div class="log-head">
+      <span>time</span><span>actor</span><span>action</span><span>leaf hash</span><span></span>
+    </div>
+    <div class="log-row">
+      <span class="ts">14:32:08</span>
+      <span class="actor">claude-code</span>
+      <span class="tool">Edit(src/main.rs L42:57)</span>
+      <span class="hash">2f1a…8c4e</span>
+      <span class="ok">✓</span>
+    </div>
+    <div class="log-row">
+      <span class="ts">14:31:47</span>
+      <span class="actor">claude-code</span>
+      <span class="tool">Bash(cargo test --release)</span>
+      <span class="hash">9a3b…e11f</span>
+      <span class="ok">✓</span>
+    </div>
+    <div class="log-row">
+      <span class="ts">14:30:22</span>
+      <span class="actor cur">cursor</span>
+      <span class="tool">Grep("TsaAnchor")</span>
+      <span class="hash">b4c7…a77d</span>
+      <span class="ok">✓</span>
+    </div>
+    <div class="log-row">
+      <span class="ts">14:29:55</span>
+      <span class="actor">claude-code</span>
+      <span class="tool">Read(Cargo.toml)</span>
+      <span class="hash">e5a2…0a44</span>
+      <span class="ok">✓</span>
+    </div>
+    <div class="log-row">
+      <span class="ts">14:29:11</span>
+      <span class="actor">claude-code</span>
+      <span class="tool">SessionStart(jack-hook)</span>
+      <span class="hash">d13f…61c9</span>
+      <span class="ok">✓</span>
+    </div>
+    <div class="log-row">
+      <span class="ts">14:27:44</span>
+      <span class="actor cur">cursor</span>
+      <span class="tool">Edit(README.md L3:3)</span>
+      <span class="hash">7b2e…ff01</span>
+      <span class="ok">✓</span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="mono">
+    punkgo-jack <b>viewer</b> · proof of existence, not proof of content · zero-network kernel, local first
+  </div>
+  <div class="mono">
+    state: <b>~/.punkgo/state/</b> · tsa: <b>freetsa.org</b> · ed25519 actor key rotated 11d ago
+  </div>
+</footer>
+
+</body>
+</html>

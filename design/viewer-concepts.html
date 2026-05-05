@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>jack viewer · 6 concepts</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-1: #121212;
+    --bg-2: #1a1a1a;
+    --fg: #e0e0e0;
+    --dim: #555;
+    --mid: #888;
+    --line: #1e1e1e;
+    --line-2: #2a2a2a;
+    --green: #7fff9b;
+    --amber: #d4a464;
+    --cyan: #60d0e0;
+    --pink: #ff8da8;
+    --purple: #b49bff;
+    --warn: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); }
+  body {
+    color: var(--fg);
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: 80px;
+  }
+
+  /* ══ Page header ══ */
+  .page-head {
+    padding: 36px 40px 24px;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .page-head h1 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 300;
+    font-size: 22px;
+    letter-spacing: -0.3px;
+    color: var(--fg);
+    margin-bottom: 4px;
+  }
+  .page-head h1 b { color: var(--green); font-weight: 500; }
+  .page-head .sub {
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 0.2px;
+  }
+  .page-head nav {
+    margin-top: 18px;
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .page-head nav a {
+    color: var(--mid);
+    text-decoration: none;
+    font-size: 11px;
+    padding: 4px 10px;
+    border: 1px solid var(--line-2);
+    transition: all 0.15s;
+  }
+  .page-head nav a:hover {
+    color: var(--green);
+    border-color: var(--green);
+  }
+  .page-head nav a b { color: var(--fg); margin-right: 6px; }
+
+  /* ══ Section frame ══ */
+  section.concept {
+    padding: 56px 40px 40px;
+    border-bottom: 1px solid var(--line-2);
+    max-width: 1200px;
+  }
+  .concept-head {
+    margin-bottom: 28px;
+  }
+  .concept-tag {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .concept-q {
+    font-family: 'Inter', sans-serif;
+    font-weight: 200;
+    font-size: 28px;
+    color: var(--fg);
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }
+  .concept-q b { color: var(--green); font-weight: 400; }
+  .concept-desc {
+    font-size: 11px;
+    color: var(--mid);
+    letter-spacing: 0.2px;
+  }
+
+  .screen {
+    background: var(--bg-1);
+    border: 1px solid var(--line-2);
+    padding: 32px 36px;
+    min-height: 380px;
+    position: relative;
+  }
+  .screen-chrome {
+    position: absolute;
+    top: 10px;
+    left: 14px;
+    font-size: 9px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .screen-chrome::before {
+    content: '● ● ●';
+    color: var(--line-2);
+    letter-spacing: 2px;
+    margin-right: 8px;
+  }
+
+  /* ══════════════════════════════════════════ */
+  /* ① DAY IN THE LIFE                           */
+  /* ══════════════════════════════════════════ */
+  .c1-hero {
+    display: grid;
+    grid-template-columns: auto auto auto auto;
+    gap: 38px;
+    align-items: baseline;
+    margin-bottom: 36px;
+    margin-top: 18px;
+  }
+  .c1-big {
+    font-family: 'Inter', sans-serif;
+    font-weight: 200;
+    font-size: 64px;
+    color: var(--green);
+    line-height: 1;
+    letter-spacing: -2px;
+  }
+  .c1-big.amber { color: var(--amber); }
+  .c1-big.cyan { color: var(--cyan); }
+  .c1-big.mid { color: var(--fg); }
+  .c1-lbl {
+    display: block;
+    font-size: 10px;
+    color: var(--dim);
+    margin-top: 6px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .c1-timeline {
+    margin-top: 16px;
+  }
+  .c1-hours {
+    display: grid;
+    grid-template-columns: repeat(24, 1fr);
+    font-size: 9px;
+    color: var(--dim);
+    margin-bottom: 4px;
+  }
+  .c1-hours span { text-align: left; }
+  .c1-bar {
+    display: grid;
+    grid-template-columns: repeat(48, 1fr);
+    height: 40px;
+    gap: 1px;
+    background: #0a0a0a;
+  }
+  .c1-cell { background: var(--bg-2); }
+  .c1-cell.edit { background: var(--green); opacity: 0.9; }
+  .c1-cell.edit-dim { background: var(--green); opacity: 0.45; }
+  .c1-cell.bash { background: var(--amber); opacity: 0.9; }
+  .c1-cell.bash-dim { background: var(--amber); opacity: 0.5; }
+  .c1-cell.read { background: var(--cyan); opacity: 0.7; }
+  .c1-cell.read-dim { background: var(--cyan); opacity: 0.35; }
+
+  .c1-legend {
+    margin-top: 14px;
+    display: flex;
+    gap: 22px;
+    font-size: 10px;
+    color: var(--mid);
+  }
+  .c1-legend span::before {
+    content: '■';
+    margin-right: 6px;
+  }
+  .c1-legend .e::before { color: var(--green); }
+  .c1-legend .b::before { color: var(--amber); }
+  .c1-legend .r::before { color: var(--cyan); }
+  .c1-legend .i::before { color: var(--bg-2); }
+
+  /* ══════════════════════════════════════════ */
+  /* ② HEATMAP                                   */
+  /* ══════════════════════════════════════════ */
+  .c2-wrap {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 30px;
+    align-items: start;
+    margin-top: 18px;
+  }
+  .c2-grid-wrap {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+  }
+  .c2-hours {
+    display: grid;
+    grid-template-rows: repeat(24, 1fr);
+    font-size: 8px;
+    color: var(--dim);
+    align-items: center;
+    justify-items: end;
+    gap: 0;
+    height: 288px;
+  }
+  .c2-hours span { line-height: 12px; }
+  .c2-grid {
+    display: grid;
+    grid-template-columns: repeat(30, 12px);
+    grid-template-rows: repeat(24, 12px);
+    gap: 1px;
+    background: #0a0a0a;
+  }
+  .c2-cell {
+    width: 12px;
+    height: 12px;
+    background: #181818;
+  }
+  .c2-cell.d1 { background: rgba(127, 255, 155, 0.18); }
+  .c2-cell.d2 { background: rgba(127, 255, 155, 0.38); }
+  .c2-cell.d3 { background: rgba(127, 255, 155, 0.62); }
+  .c2-cell.d4 { background: rgba(127, 255, 155, 0.88); }
+  .c2-side {
+    font-size: 11px;
+    color: var(--mid);
+    line-height: 1.8;
+  }
+  .c2-side h3 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 400;
+    font-size: 14px;
+    color: var(--fg);
+    margin-bottom: 14px;
+  }
+  .c2-side strong { color: var(--green); font-weight: 500; }
+  .c2-side .hl { color: var(--amber); }
+  .c2-legend {
+    margin-top: 16px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 9px;
+    color: var(--dim);
+  }
+  .c2-legend .sw {
+    width: 12px;
+    height: 12px;
+    display: inline-block;
+  }
+
+  /* ══════════════════════════════════════════ */
+  /* ③ WRAPPED                                   */
+  /* ══════════════════════════════════════════ */
+  .c3-card {
+    max-width: 380px;
+    margin: 20px auto;
+    background: linear-gradient(180deg, #0f1812 0%, #0a1210 100%);
+    border: 1px solid var(--green);
+    padding: 36px 32px 28px;
+    font-family: 'Inter', sans-serif;
+    position: relative;
+  }
+  .c3-card::before {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 1px solid rgba(127, 255, 155, 0.15);
+    pointer-events: none;
+  }
+  .c3-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .c3-header .label {
+    font-size: 10px;
+    letter-spacing: 4px;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+  .c3-header .title {
+    font-size: 20px;
+    color: var(--green);
+    font-weight: 300;
+    margin-top: 4px;
+    letter-spacing: 1px;
+  }
+  .c3-persona {
+    text-align: center;
+    padding: 18px 0;
+    border-top: 1px dashed rgba(127, 255, 155, 0.25);
+    border-bottom: 1px dashed rgba(127, 255, 155, 0.25);
+  }
+  .c3-persona .you {
+    font-size: 11px;
+    color: var(--mid);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .c3-persona .name {
+    font-size: 44px;
+    font-weight: 800;
+    color: var(--green);
+    letter-spacing: -0.5px;
+    line-height: 1;
+  }
+  .c3-persona .tagline {
+    font-size: 11px;
+    color: var(--mid);
+    margin-top: 10px;
+    font-style: italic;
+  }
+  .c3-stats {
+    margin-top: 22px;
+  }
+  .c3-stat {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    padding: 9px 0;
+    border-bottom: 1px dotted rgba(127, 255, 155, 0.12);
+    font-size: 12px;
+    color: var(--fg);
+  }
+  .c3-stat:last-child { border-bottom: none; }
+  .c3-stat .k { color: var(--mid); font-size: 11px; }
+  .c3-stat .v { color: var(--green); font-weight: 500; font-family: 'JetBrains Mono', monospace; }
+  .c3-stat .v.a { color: var(--amber); }
+  .c3-footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 9px;
+    color: var(--dim);
+    letter-spacing: 2px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .c3-footer b { color: var(--green); font-weight: 400; }
+
+  /* ══════════════════════════════════════════ */
+  /* ④ PROJECT MAP                               */
+  /* ══════════════════════════════════════════ */
+  .c4-wrap {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 30px;
+    margin-top: 16px;
+  }
+  .c4-map {
+    display: grid;
+    grid-template-columns: 3fr 2fr 1fr;
+    grid-template-rows: repeat(3, 80px);
+    gap: 3px;
+    background: #0a0a0a;
+  }
+  .c4-tile {
+    background: var(--bg-2);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+  }
+  .c4-tile .name {
+    font-size: 11px;
+    color: var(--fg);
+    z-index: 1;
+    position: relative;
+  }
+  .c4-tile .count {
+    font-size: 18px;
+    font-weight: 300;
+    font-family: 'Inter', sans-serif;
+    color: var(--fg);
+    z-index: 1;
+    position: relative;
+  }
+  .c4-tile.hot {
+    background: radial-gradient(ellipse at 40% 50%, rgba(127,255,155,0.55) 0%, rgba(127,255,155,0.2) 40%, rgba(127,255,155,0.05) 100%);
+    border: 1px solid rgba(127,255,155,0.5);
+  }
+  .c4-tile.hot .count { color: var(--green); font-weight: 500; }
+  .c4-tile.warm {
+    background: radial-gradient(ellipse at 30% 60%, rgba(212,164,100,0.45) 0%, rgba(212,164,100,0.12) 60%, transparent 100%);
+    border: 1px solid rgba(212,164,100,0.35);
+  }
+  .c4-tile.warm .count { color: var(--amber); }
+  .c4-tile.lukewarm {
+    background: rgba(96,208,224,0.08);
+    border: 1px solid rgba(96,208,224,0.2);
+  }
+  .c4-tile.lukewarm .count { color: var(--cyan); }
+  .c4-tile.cold {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+  }
+  .c4-tile.cold .count { color: var(--dim); }
+  .c4-tile.cold .name { color: var(--mid); }
+
+  .c4-span-2r { grid-row: span 2; }
+  .c4-span-2c { grid-column: span 2; }
+
+  .c4-legend {
+    font-size: 10px;
+    color: var(--mid);
+    line-height: 1.9;
+    min-width: 160px;
+  }
+  .c4-legend h4 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    color: var(--fg);
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+  .c4-legend .row { display: flex; align-items: center; gap: 8px; }
+  .c4-legend .sw { width: 10px; height: 10px; display: inline-block; }
+  .c4-legend .h { background: rgba(127,255,155,0.55); }
+  .c4-legend .w { background: rgba(212,164,100,0.45); }
+  .c4-legend .l { background: rgba(96,208,224,0.2); }
+  .c4-legend .c { background: var(--bg-2); border: 1px solid var(--line); }
+
+  /* ══════════════════════════════════════════ */
+  /* ⑤ RECEIPT WALL                              */
+  /* ══════════════════════════════════════════ */
+  .c5-wall {
+    display: flex;
+    gap: 16px;
+    overflow-x: auto;
+    padding: 18px 4px 18px;
+    margin-top: 10px;
+    transform: rotate(-0.3deg);
+  }
+  .c5-receipt {
+    flex: 0 0 220px;
+    background: #f5f2e8;
+    color: #222;
+    padding: 16px 14px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    line-height: 1.45;
+    position: relative;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
+  }
+  .c5-receipt::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: repeating-linear-gradient(90deg, #f5f2e8 0 6px, transparent 6px 12px);
+  }
+  .c5-receipt::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: repeating-linear-gradient(90deg, #f5f2e8 0 6px, transparent 6px 12px);
+  }
+  .c5-receipt:nth-child(2n) { transform: rotate(0.8deg) translateY(4px); background: #f2ede0; }
+  .c5-receipt:nth-child(3n) { transform: rotate(-0.6deg) translateY(-2px); }
+  .c5-receipt h4 {
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed #888;
+  }
+  .c5-receipt .r {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+  }
+  .c5-receipt .r.w { color: #888; }
+  .c5-receipt .action {
+    margin: 8px 0 6px;
+    padding: 6px 0;
+    border-top: 1px dashed #aaa;
+    border-bottom: 1px dashed #aaa;
+    font-weight: 500;
+    word-break: break-all;
+  }
+  .c5-receipt .hash {
+    color: #556;
+    font-size: 9px;
+    margin-top: 8px;
+    word-break: break-all;
+  }
+  .c5-receipt .sig {
+    text-align: center;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed #888;
+    font-size: 9px;
+    color: #6a8;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+
+  /* ══════════════════════════════════════════ */
+  /* ⑥ WHILE YOU SLEEP                           */
+  /* ══════════════════════════════════════════ */
+  .c6-screen {
+    background: radial-gradient(ellipse at top, #0f1020 0%, #050610 70%);
+    border-color: #1a1d3a;
+    overflow: hidden;
+  }
+  .c6-screen::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(1px 1px at 23% 18%, rgba(255,255,255,0.7) 0, transparent 100%),
+      radial-gradient(1px 1px at 67% 9%, rgba(255,255,255,0.5) 0, transparent 100%),
+      radial-gradient(1px 1px at 85% 25%, rgba(255,255,255,0.6) 0, transparent 100%),
+      radial-gradient(1px 1px at 15% 42%, rgba(255,255,255,0.4) 0, transparent 100%),
+      radial-gradient(1px 1px at 48% 12%, rgba(255,255,255,0.5) 0, transparent 100%),
+      radial-gradient(1px 1px at 92% 55%, rgba(255,255,255,0.4) 0, transparent 100%),
+      radial-gradient(1px 1px at 35% 65%, rgba(255,255,255,0.3) 0, transparent 100%),
+      radial-gradient(1px 1px at 72% 78%, rgba(255,255,255,0.5) 0, transparent 100%),
+      radial-gradient(2px 2px at 55% 34%, rgba(180,155,255,0.6) 0, transparent 100%),
+      radial-gradient(1px 1px at 10% 80%, rgba(180,155,255,0.5) 0, transparent 100%);
+    pointer-events: none;
+  }
+  .c6-moon {
+    position: absolute;
+    top: 34px;
+    right: 44px;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #ede8ff 0%, #b4a8d8 50%, #554874 100%);
+    box-shadow: 0 0 40px rgba(180, 155, 255, 0.35), inset -12px -10px 20px rgba(0,0,0,0.4);
+  }
+  .c6-body {
+    position: relative;
+    z-index: 1;
+    margin-top: 18px;
+    padding-right: 90px;
+  }
+  .c6-title {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 300;
+    color: var(--purple);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .c6-subtitle {
+    font-family: 'Inter', sans-serif;
+    font-size: 22px;
+    font-weight: 200;
+    color: #e8e4ff;
+    margin-bottom: 28px;
+    letter-spacing: 0.2px;
+  }
+  .c6-subtitle em { font-style: italic; color: var(--purple); }
+  .c6-log {
+    font-size: 12px;
+    color: #c8c3e8;
+    line-height: 2.1;
+  }
+  .c6-log .line {
+    display: grid;
+    grid-template-columns: 60px 24px 1fr;
+    gap: 8px;
+    padding: 3px 0;
+    opacity: 0;
+    animation: fadein 0.6s ease forwards;
+  }
+  .c6-log .line:nth-child(1) { animation-delay: 0.1s; }
+  .c6-log .line:nth-child(2) { animation-delay: 0.4s; }
+  .c6-log .line:nth-child(3) { animation-delay: 0.7s; }
+  .c6-log .line:nth-child(4) { animation-delay: 1.0s; }
+  .c6-log .line:nth-child(5) { animation-delay: 1.3s; }
+  .c6-log .line:nth-child(6) { animation-delay: 1.6s; }
+  .c6-log .line:nth-child(7) { animation-delay: 1.9s; }
+  @keyframes fadein {
+    to { opacity: 1; }
+  }
+  .c6-log .t { color: var(--purple); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .c6-log .i { text-align: center; color: #8070b4; }
+  .c6-log .m { color: #d8d4f0; }
+  .c6-log .m b { color: var(--green); font-weight: 400; }
+  .c6-sig {
+    margin-top: 32px;
+    font-size: 10px;
+    color: #6a5f88;
+    font-style: italic;
+    text-align: right;
+  }
+
+  /* ══ Footer ══ */
+  .page-foot {
+    padding: 28px 40px;
+    color: var(--dim);
+    font-size: 10px;
+    letter-spacing: 0.3px;
+    border-top: 1px solid var(--line-2);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1><b>jack viewer</b> · 6 concepts</h1>
+  <div class="sub">six different answers to "what should people see?" — pick one, we build it for real</div>
+  <nav>
+    <a href="#c1"><b>①</b> day in the life</a>
+    <a href="#c2"><b>②</b> heatmap</a>
+    <a href="#c3"><b>③</b> wrapped</a>
+    <a href="#c4"><b>④</b> project map</a>
+    <a href="#c5"><b>⑤</b> receipt wall</a>
+    <a href="#c6"><b>⑥</b> while you sleep</a>
+  </nav>
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<!-- ① DAY IN THE LIFE                            -->
+<!-- ════════════════════════════════════════════ -->
+<section class="concept" id="c1">
+  <div class="concept-head">
+    <div class="concept-tag">CONCEPT ①</div>
+    <h2 class="concept-q">what did my AI <b>do today</b>?</h2>
+    <div class="concept-desc">one screen · screen-time for your AI · the core hero number + 24h shape</div>
+  </div>
+  <div class="screen">
+    <div class="screen-chrome">today · tuesday · april 15</div>
+
+    <div class="c1-hero">
+      <div>
+        <div class="c1-big">63</div>
+        <span class="c1-lbl">actions</span>
+      </div>
+      <div>
+        <div class="c1-big amber">34</div>
+        <span class="c1-lbl">files edited</span>
+      </div>
+      <div>
+        <div class="c1-big cyan">12</div>
+        <span class="c1-lbl">tests run</span>
+      </div>
+      <div>
+        <div class="c1-big mid">1,842</div>
+        <span class="c1-lbl">lines written</span>
+      </div>
+    </div>
+
+    <div class="c1-timeline">
+      <div class="c1-hours">
+        <span>00</span><span></span><span></span><span></span>
+        <span>04</span><span></span><span></span><span></span>
+        <span>08</span><span></span><span></span><span></span>
+        <span>12</span><span></span><span></span><span></span>
+        <span>16</span><span></span><span></span><span></span>
+        <span>20</span><span></span><span></span><span></span>
+      </div>
+      <div class="c1-bar">
+        <!-- 48 half-hour slots -->
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell edit-dim"></div><div class="c1-cell edit-dim"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell read-dim"></div><div class="c1-cell read"></div>
+        <div class="c1-cell edit"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell bash"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell edit"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell edit-dim"></div><div class="c1-cell bash-dim"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell edit"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell bash"></div><div class="c1-cell bash"></div>
+        <div class="c1-cell edit"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell edit"></div><div class="c1-cell read"></div>
+        <div class="c1-cell read-dim"></div><div class="c1-cell"></div>
+        <div class="c1-cell edit-dim"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell bash"></div><div class="c1-cell edit"></div>
+        <div class="c1-cell edit"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+        <div class="c1-cell"></div><div class="c1-cell"></div>
+      </div>
+      <div class="c1-legend">
+        <span class="e">Edit</span>
+        <span class="b">Bash</span>
+        <span class="r">Read/Grep</span>
+        <span class="i">idle</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<!-- ② HEATMAP                                    -->
+<!-- ════════════════════════════════════════════ -->
+<section class="concept" id="c2">
+  <div class="concept-head">
+    <div class="concept-tag">CONCEPT ②</div>
+    <h2 class="concept-q">when does my AI <b>actually work</b>?</h2>
+    <div class="concept-desc">GitHub contribution graph, but for AI activity · 30 days × 24 hours</div>
+  </div>
+  <div class="screen">
+    <div class="screen-chrome">past 30 days · hourly density</div>
+    <div class="c2-wrap">
+      <div class="c2-grid-wrap">
+        <div class="c2-hours">
+          <span>00</span><span></span><span>02</span><span></span>
+          <span>04</span><span></span><span>06</span><span></span>
+          <span>08</span><span></span><span>10</span><span></span>
+          <span>12</span><span></span><span>14</span><span></span>
+          <span>16</span><span></span><span>18</span><span></span>
+          <span>20</span><span></span><span>22</span><span></span>
+        </div>
+        <div class="c2-grid" id="heatgrid"></div>
+      </div>
+      <div class="c2-side">
+        <h3>你的 AI 作息</h3>
+        <div>most active: <strong>tue 02:00</strong></div>
+        <div>dead hours: <span class="hl">04:00 – 07:00</span></div>
+        <div>total: <strong>4,217 actions</strong></div>
+        <div>peak day: <strong>apr 09, 312 actions</strong></div>
+        <div style="margin-top:12px; color: var(--mid); font-style: italic;">
+          "你的 AI 是夜猫子。"
+        </div>
+        <div class="c2-legend" style="margin-top: 28px;">
+          <span>less</span>
+          <span class="sw" style="background:#181818;"></span>
+          <span class="sw" style="background:rgba(127,255,155,0.18);"></span>
+          <span class="sw" style="background:rgba(127,255,155,0.38);"></span>
+          <span class="sw" style="background:rgba(127,255,155,0.62);"></span>
+          <span class="sw" style="background:rgba(127,255,155,0.88);"></span>
+          <span>more</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<!-- ③ WRAPPED                                    -->
+<!-- ════════════════════════════════════════════ -->
+<section class="concept" id="c3">
+  <div class="concept-head">
+    <div class="concept-tag">CONCEPT ③</div>
+    <h2 class="concept-q">what kind of <b>AI user am I</b>?</h2>
+    <div class="concept-desc">spotify wrapped for your AI · one shareable card · personality label + 4 stats</div>
+  </div>
+  <div class="screen" style="padding: 20px;">
+    <div class="c3-card">
+      <div class="c3-header">
+        <div class="label">YOUR AI · 30 DAYS</div>
+        <div class="title">WRAPPED</div>
+      </div>
+
+      <div class="c3-persona">
+        <div class="you">you are a</div>
+        <div class="name">REWRITER</div>
+        <div class="tagline">"perfection is 14 edits away"</div>
+      </div>
+
+      <div class="c3-stats">
+        <div class="c3-stat">
+          <span class="k">edit vs write ratio</span>
+          <span class="v">3.2×</span>
+        </div>
+        <div class="c3-stat">
+          <span class="k">most-touched file</span>
+          <span class="v a">main.rs · 87</span>
+        </div>
+        <div class="c3-stat">
+          <span class="k">most active</span>
+          <span class="v">tue 02:00</span>
+        </div>
+        <div class="c3-stat">
+          <span class="k">longest session</span>
+          <span class="v">4h 17m</span>
+        </div>
+        <div class="c3-stat">
+          <span class="k">rewrite champion</span>
+          <span class="v a">auth.rs · 14×</span>
+        </div>
+      </div>
+
+      <div class="c3-footer">
+        <b>punkgo</b> · receipt-verified
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<!-- ④ PROJECT MAP                                -->
+<!-- ════════════════════════════════════════════ -->
+<section class="concept" id="c4">
+  <div class="concept-head">
+    <div class="concept-tag">CONCEPT ④</div>
+    <h2 class="concept-q">where is my AI <b>actually touching</b>?</h2>
+    <div class="concept-desc">your project as a heat city · brighter tiles = more AI attention</div>
+  </div>
+  <div class="screen">
+    <div class="screen-chrome">punkgo-jack · past 30 days</div>
+    <div class="c4-wrap">
+      <div class="c4-map">
+        <div class="c4-tile hot c4-span-2r">
+          <div class="name">src/main.rs</div>
+          <div class="count">87</div>
+        </div>
+        <div class="c4-tile warm">
+          <div class="name">src/adapters/</div>
+          <div class="count">45</div>
+        </div>
+        <div class="c4-tile warm">
+          <div class="name">src/roast/</div>
+          <div class="count">38</div>
+        </div>
+
+        <div class="c4-tile hot">
+          <div class="name">src/session.rs</div>
+          <div class="count">51</div>
+        </div>
+        <div class="c4-tile lukewarm">
+          <div class="name">Cargo.toml</div>
+          <div class="count">12</div>
+        </div>
+
+        <div class="c4-tile warm c4-span-2c">
+          <div class="name">src/ingest.rs</div>
+          <div class="count">29</div>
+        </div>
+        <div class="c4-tile lukewarm">
+          <div class="name">README</div>
+          <div class="count">8</div>
+        </div>
+        <div class="c4-tile cold">
+          <div class="name">tests/</div>
+          <div class="count">3</div>
+        </div>
+      </div>
+      <div class="c4-legend">
+        <h4>heat</h4>
+        <div class="row"><span class="sw h"></span> hot · 50+</div>
+        <div class="row"><span class="sw w"></span> warm · 20–49</div>
+        <div class="row"><span class="sw l"></span> lukewarm · 5–19</div>
+        <div class="row"><span class="sw c"></span> cold · &lt;5</div>
+        <div style="margin-top: 16px; font-size: 10px; line-height: 1.6;">
+          <div style="color: var(--fg);">your AI spent <strong style="color: var(--green);">46%</strong></div>
+          <div>of its time in just 3 files</div>
+          <div style="margin-top: 10px; font-style: italic; color: var(--dim);">
+            你的 AI 是偏科的。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<!-- ⑤ RECEIPT WALL                               -->
+<!-- ════════════════════════════════════════════ -->
+<section class="concept" id="c5">
+  <div class="concept-head">
+    <div class="concept-tag">CONCEPT ⑤</div>
+    <h2 class="concept-q">show me <b>the receipts</b>.</h2>
+    <div class="concept-desc">literal. receipts. every action = one slip of paper · "Every AI action gets a receipt" taken seriously</div>
+  </div>
+  <div class="screen">
+    <div class="screen-chrome">receipts · most recent 5 of 4,217</div>
+    <div class="c5-wall">
+
+      <div class="c5-receipt">
+        <h4>PUNKGO · JACK</h4>
+        <div class="r"><span>date</span><span>2026-04-15</span></div>
+        <div class="r"><span>time</span><span>14:32:08Z</span></div>
+        <div class="r"><span>actor</span><span>claude-code</span></div>
+        <div class="r w"><span>session</span><span>s7a · 3h12m</span></div>
+        <div class="action">Edit src/main.rs<br/>lines 42:57 · +18/-4</div>
+        <div class="r"><span>input hash</span><span>2f1a…</span></div>
+        <div class="r"><span>output hash</span><span>8c4e…</span></div>
+        <div class="hash">leaf · c4f8e19a3b2f7e5d1c</div>
+        <div class="sig">ed25519 · verified ✓</div>
+      </div>
+
+      <div class="c5-receipt">
+        <h4>PUNKGO · JACK</h4>
+        <div class="r"><span>date</span><span>2026-04-15</span></div>
+        <div class="r"><span>time</span><span>14:31:47Z</span></div>
+        <div class="r"><span>actor</span><span>claude-code</span></div>
+        <div class="r w"><span>session</span><span>s7a · 3h11m</span></div>
+        <div class="action">Bash cargo test --release<br/>exit 0 · 47.3s</div>
+        <div class="r"><span>energy</span><span>47 units</span></div>
+        <div class="r"><span>hold</span><span>released</span></div>
+        <div class="hash">leaf · 9a3b2f7e5d1ce11fa6</div>
+        <div class="sig">ed25519 · verified ✓</div>
+      </div>
+
+      <div class="c5-receipt">
+        <h4>PUNKGO · JACK</h4>
+        <div class="r"><span>date</span><span>2026-04-15</span></div>
+        <div class="r"><span>time</span><span>14:30:22Z</span></div>
+        <div class="r"><span>actor</span><span>cursor</span></div>
+        <div class="r w"><span>session</span><span>s3e · 46m</span></div>
+        <div class="action">Grep("TsaAnchor")<br/>4 matches · 2 files</div>
+        <div class="r"><span>energy</span><span>2 units</span></div>
+        <div class="r"><span>hold</span><span>—</span></div>
+        <div class="hash">leaf · b4c74a77d8e10ab2c5</div>
+        <div class="sig">ed25519 · verified ✓</div>
+      </div>
+
+      <div class="c5-receipt">
+        <h4>PUNKGO · JACK</h4>
+        <div class="r"><span>date</span><span>2026-04-15</span></div>
+        <div class="r"><span>time</span><span>14:29:55Z</span></div>
+        <div class="r"><span>actor</span><span>claude-code</span></div>
+        <div class="r w"><span>session</span><span>s7a · 3h9m</span></div>
+        <div class="action">Read Cargo.toml<br/>all · 86 lines</div>
+        <div class="r"><span>energy</span><span>1 unit</span></div>
+        <div class="r"><span>hold</span><span>—</span></div>
+        <div class="hash">leaf · e5a20a44c1d938fb11</div>
+        <div class="sig">ed25519 · verified ✓</div>
+      </div>
+
+      <div class="c5-receipt">
+        <h4>PUNKGO · JACK</h4>
+        <div class="r"><span>date</span><span>2026-04-15</span></div>
+        <div class="r"><span>time</span><span>14:29:11Z</span></div>
+        <div class="r"><span>actor</span><span>claude-code</span></div>
+        <div class="r w"><span>session</span><span>s7a · START</span></div>
+        <div class="action">SessionStart<br/>jack-hook · pid 28471</div>
+        <div class="r"><span>energy</span><span>1000 granted</span></div>
+        <div class="r"><span>tsa</span><span>anchored</span></div>
+        <div class="hash">leaf · d13f61c9ee7c22514</div>
+        <div class="sig">ed25519 · verified ✓</div>
+      </div>
+
+    </div>
+    <div style="margin-top: 12px; font-size: 10px; color: var(--dim); text-align: center;">
+      ← scroll · infinite wall of your AI's paper trail ·
+      <span style="color: var(--green);">every slip is cryptographically signed</span> →
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<!-- ⑥ WHILE YOU SLEEP                            -->
+<!-- ════════════════════════════════════════════ -->
+<section class="concept" id="c6">
+  <div class="concept-head">
+    <div class="concept-tag">CONCEPT ⑥</div>
+    <h2 class="concept-q">what did my AI do <b>while I was asleep</b>?</h2>
+    <div class="concept-desc">only events between 23:00 and 08:00 · the AI's nocturnal life · slightly eerie, slightly romantic</div>
+  </div>
+  <div class="screen c6-screen">
+    <div class="c6-moon"></div>
+    <div class="screen-chrome" style="color: #6a5f88;">night shift · last night</div>
+    <div class="c6-body">
+      <div class="c6-title">◐ NIGHT SHIFT</div>
+      <div class="c6-subtitle">while you were <em>asleep</em>, your AI…</div>
+
+      <div class="c6-log">
+        <div class="line"><span class="t">23:47</span><span class="i">◐</span><span class="m">session began · no human present</span></div>
+        <div class="line"><span class="t">01:22</span><span class="i">⋆</span><span class="m">ran <b>cargo check</b> on branch <b>feature/pip-004</b></span></div>
+        <div class="line"><span class="t">02:17</span><span class="i">⋆</span><span class="m">edited <b>src/anchor.rs</b> · retried 3 times</span></div>
+        <div class="line"><span class="t">02:41</span><span class="i">⋆</span><span class="m">committed "<b>fix: tsa retry backoff</b>"</span></div>
+        <div class="line"><span class="t">03:45</span><span class="i">⋆</span><span class="m">ran 128 tests · <b>all green</b></span></div>
+        <div class="line"><span class="t">04:12</span><span class="i">◐</span><span class="m">session ended · total energy spent: <b>214 / 1000</b></span></div>
+        <div class="line"><span class="t">—</span><span class="i">☾</span><span class="m" style="font-style: italic; color: #9b93c4;">your AI rested for 3h 22m before you woke up</span></div>
+      </div>
+
+      <div class="c6-sig">— receipt-verified · 7 events · anchored to utc —</div>
+    </div>
+  </div>
+</section>
+
+<div class="page-foot">
+  all 6 are mock · same kernel data source, 6 different stories · pick one, I build it for real
+</div>
+
+<script>
+  // Generate the heatmap cells (24 hours × 30 days)
+  const grid = document.getElementById('heatgrid');
+  // realistic-ish pattern: night owl (peaks at 01-03), some afternoon, mostly dead morning
+  function densityFor(day, hour) {
+    // Tuesday (day index 1, 8, 15, 22, 29) night owl pattern
+    let base = 0;
+    // night peak 23-03
+    if (hour >= 23 || hour <= 3) base = 3;
+    // afternoon 14-18
+    else if (hour >= 14 && hour <= 18) base = 2;
+    // morning dead
+    else if (hour >= 4 && hour <= 8) base = 0;
+    else base = 1;
+
+    // tuesdays more active
+    const dow = day % 7;
+    if (dow === 1) base += 1;
+    if (dow === 5 || dow === 6) base = Math.max(0, base - 1);
+
+    // some randomness
+    const r = Math.sin(day * 31 + hour * 7) * 0.5 + 0.5;
+    if (r > 0.75) base += 1;
+    if (r < 0.2) base -= 1;
+
+    return Math.max(0, Math.min(4, base));
+  }
+
+  // Fill column-major so it reads as days × hours with hours on rows
+  // grid-auto-flow defaults to row, so we need 30 columns × 24 rows
+  // We want: row = hour, column = day
+  // CSS grid-auto-flow: column would fill column by column
+  grid.style.gridAutoFlow = 'column';
+
+  for (let day = 0; day < 30; day++) {
+    for (let hour = 0; hour < 24; hour++) {
+      const cell = document.createElement('div');
+      cell.className = 'c2-cell';
+      const d = densityFor(day, hour);
+      if (d > 0) cell.classList.add('d' + d);
+      grid.appendChild(cell);
+    }
+  }
+</script>
+
+</body>
+</html>

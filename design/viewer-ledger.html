@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>jack · the ledger</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Inter:wght@200;300;400;500;600&family=IBM+Plex+Serif:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-1: #0f0f0e;
+    --bg-2: #141412;
+    --ink: #ebe6d4;
+    --ink-warm: #f5efd8;
+    --ink-dim: #7a756a;
+    --ink-mute: #4a463d;
+    --rule: #1e1d18;
+    --rule-2: #2a2822;
+    --green: #7fff9b;
+    --amber: #d4a464;
+    --amber-d: #8a7d5a;
+    --cyan: #60d0e0;
+    --warn: #ff8d7a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); }
+  body {
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-weight: 300;
+    font-size: 15px;
+    line-height: 1.68;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'JetBrains Mono', Menlo, monospace; }
+  .serif { font-family: 'IBM Plex Serif', Georgia, serif; }
+
+  /* ══ Layout ══ */
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 72px 48px 100px;
+  }
+
+  /* ══ Top bar ══ */
+  .top {
+    border-bottom: 1px solid var(--rule-2);
+    padding-bottom: 28px;
+    margin-bottom: 44px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .top .brand {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-weight: 300;
+    font-size: 26px;
+    letter-spacing: -0.2px;
+    color: var(--ink-warm);
+  }
+  .top .brand em {
+    font-style: italic;
+    color: var(--green);
+  }
+  .top .brand .tag {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    letter-spacing: 1px;
+    margin-top: 6px;
+    text-transform: uppercase;
+  }
+  .top .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    text-align: right;
+    letter-spacing: 0.3px;
+  }
+  .top .meta .dot::before {
+    content: '●';
+    color: var(--green);
+    margin-right: 6px;
+    animation: pulse 2.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* ══ Epigraph ══ */
+  .epigraph {
+    margin: 0 0 60px;
+    padding: 24px 28px;
+    border-left: 2px solid var(--amber-d);
+    background: var(--bg-1);
+  }
+  .epigraph .q {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 17px;
+    font-weight: 300;
+    font-style: italic;
+    color: var(--ink-warm);
+    line-height: 1.55;
+    margin-bottom: 10px;
+  }
+  .epigraph .q::before { content: '"'; color: var(--amber); margin-right: 2px; }
+  .epigraph .q::after { content: '"'; color: var(--amber); margin-left: 2px; }
+  .epigraph .a {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    letter-spacing: 0.3px;
+  }
+  .epigraph .a::before { content: '— '; }
+
+  /* ══ Summary bar ══ */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    margin-bottom: 56px;
+    border-top: 1px solid var(--rule-2);
+    border-bottom: 1px solid var(--rule-2);
+  }
+  .summary .cell {
+    padding: 18px 4px;
+    border-right: 1px solid var(--rule);
+  }
+  .summary .cell:last-child { border-right: none; }
+  .summary .k {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--ink-dim);
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+  }
+  .summary .v {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 26px;
+    font-weight: 300;
+    color: var(--ink-warm);
+    letter-spacing: -0.5px;
+    margin-top: 4px;
+  }
+  .summary .v.green { color: var(--green); }
+  .summary .v.amber { color: var(--amber); }
+
+  /* ══ Chapters ══ */
+  .chapter {
+    margin-bottom: 64px;
+    position: relative;
+  }
+  .chapter-head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 24px;
+    align-items: baseline;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px dashed var(--rule-2);
+  }
+  .chapter-date {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+  }
+  .chapter-date .day { color: var(--ink); }
+  .chapter-date .dur { color: var(--amber-d); margin-left: 10px; }
+  .chapter-date .actor { color: var(--ink-dim); margin-left: 10px; }
+
+  .chapter-verify {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--ink-dim);
+    text-align: right;
+    letter-spacing: 0.4px;
+  }
+  .chapter-verify .ok { color: var(--green); }
+  .chapter-verify .warn { color: var(--warn); }
+
+  .chapter-title {
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-weight: 300;
+    font-size: 28px;
+    line-height: 1.2;
+    color: var(--ink-warm);
+    margin-bottom: 14px;
+    letter-spacing: -0.4px;
+  }
+  .chapter-title::before {
+    content: '§';
+    color: var(--amber);
+    margin-right: 12px;
+    font-weight: 400;
+  }
+
+  .chapter-body {
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.7;
+    margin-bottom: 22px;
+  }
+  .chapter-body em {
+    color: var(--ink-warm);
+    font-style: italic;
+  }
+  .chapter-body code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: var(--bg-2);
+    padding: 1px 6px;
+    color: var(--amber);
+    border: 1px solid var(--rule);
+  }
+  .chapter-body .h {
+    color: var(--green);
+    text-decoration: none;
+  }
+
+  /* ══ Receipts footnote strip ══ */
+  .receipts-toggle {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    user-select: none;
+    padding: 6px 0;
+    margin-bottom: 8px;
+    display: inline-block;
+    transition: color 0.2s;
+  }
+  .receipts-toggle:hover { color: var(--amber); }
+  .receipts-toggle::before {
+    content: '▸ ';
+    color: var(--ink-mute);
+    margin-right: 4px;
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+  .chapter.open .receipts-toggle::before {
+    content: '▾ ';
+    color: var(--amber);
+  }
+  .receipts-toggle b { color: var(--ink); font-weight: 400; }
+
+  .receipts {
+    display: none;
+    margin-top: 4px;
+    padding: 16px 0 8px;
+    border-top: 1px dashed var(--rule-2);
+  }
+  .chapter.open .receipts { display: block; }
+
+  /* Thermal strip — horizontal scroll of mini-receipts */
+  .receipt-strip {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 6px 0 14px;
+    margin-bottom: 14px;
+  }
+  .slip {
+    flex: 0 0 168px;
+    background: #f4efdd;
+    color: #2a2620;
+    padding: 10px 12px 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    line-height: 1.4;
+    position: relative;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.25);
+  }
+  .slip::before, .slip::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: repeating-linear-gradient(90deg, #f4efdd 0 4px, transparent 4px 8px);
+  }
+  .slip::before { top: -4px; }
+  .slip::after { bottom: -4px; }
+  .slip:nth-child(2n) { background: #f0ebd6; transform: rotate(0.5deg); }
+  .slip:nth-child(3n) { transform: rotate(-0.3deg) translateY(1px); }
+  .slip .t { color: #6a6458; font-size: 8px; }
+  .slip .act { font-weight: 500; margin-top: 3px; color: #1a1812; word-break: break-all; }
+  .slip .h { color: #8a7555; font-size: 8px; margin-top: 5px; word-break: break-all; }
+  .slip .s { font-size: 7px; color: #6a8060; letter-spacing: 0.5px; margin-top: 4px; border-top: 1px dashed #999; padding-top: 3px; text-align: center; }
+
+  /* ══ Outcome box ══ */
+  .outcome {
+    border: 1px solid var(--rule-2);
+    padding: 12px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-dim);
+    background: var(--bg-1);
+    margin-top: 12px;
+  }
+  .outcome .lbl {
+    color: var(--ink-mute);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 9px;
+    margin-right: 8px;
+  }
+  .outcome .sha { color: var(--amber); }
+  .outcome .msg { color: var(--ink); }
+  .outcome .file { color: var(--cyan); }
+  .outcome.failed { border-color: rgba(255, 141, 122, 0.25); }
+  .outcome.failed .lbl { color: var(--warn); }
+  .outcome .row { padding: 2px 0; }
+
+  /* ══ Footer ══ */
+  .page-foot {
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--rule-2);
+    color: var(--ink-mute);
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.3px;
+    text-align: center;
+    line-height: 1.8;
+  }
+  .page-foot b { color: var(--ink-dim); font-weight: 400; }
+  .page-foot em { color: var(--green); font-style: normal; }
+
+  .demo-tag {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    background: #1a1a1a;
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    padding: 3px 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    z-index: 999;
+  }
+</style>
+</head>
+<body>
+
+<div class="demo-tag">mock · concept 7</div>
+
+<div class="page">
+
+  <!-- ═══ TOP ═══ -->
+  <div class="top">
+    <div class="brand">
+      jack · the <em>ledger</em>
+      <span class="tag">april 2026 · ~/.punkgo/state</span>
+    </div>
+    <div class="meta">
+      <div><span class="dot">128 chapters · all anchored</span></div>
+      <div>4,217 receipts · ed25519 verified</div>
+      <div>tsa: freetsa.org · last 14:32:08Z</div>
+    </div>
+  </div>
+
+  <!-- ═══ EPIGRAPH ═══ -->
+  <div class="epigraph">
+    <div class="q">A receipt answers what. A story answers why it mattered.</div>
+    <div class="a">the jack manual, §0</div>
+  </div>
+
+  <!-- ═══ SUMMARY ═══ -->
+  <div class="summary">
+    <div class="cell"><div class="k">chapters</div><div class="v">37</div></div>
+    <div class="cell"><div class="k">receipts</div><div class="v">4,217</div></div>
+    <div class="cell"><div class="k">anchored</div><div class="v green">100%</div></div>
+    <div class="cell"><div class="k">longest chapter</div><div class="v amber">4h 17m</div></div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CHAPTER 1 — THE NIGHT WE FIXED AUTH             -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="chapter open">
+    <div class="chapter-head">
+      <div class="chapter-date">
+        <span class="day">tue · apr 09</span>
+        <span>02:17 — 05:03</span>
+        <span class="dur">2h 46m</span>
+        <span class="actor">claude-code · s4a</span>
+      </div>
+      <div class="chapter-verify">
+        17 receipts · <span class="ok">✓ verified</span>
+      </div>
+    </div>
+
+    <h2 class="chapter-title">The night we fixed auth</h2>
+
+    <div class="chapter-body">
+      Started with a failing test on the OAuth callback. Claude tried
+      <em>three approaches</em> before finding a race condition in token refresh —
+      the refresh fired before the previous request had written to <code>session.rs</code>.
+      By dawn, 14 edits and 2 commits later, all 128 tests were green. You
+      didn't say much. You mostly watched.
+    </div>
+
+    <div class="receipts-toggle" onclick="this.parentElement.classList.toggle('open')">
+      <b>show 17 receipts</b> — the paper trail underneath
+    </div>
+
+    <div class="receipts">
+      <div class="receipt-strip">
+        <div class="slip">
+          <div class="t">02:17:44Z</div>
+          <div class="act">SessionStart · jack-hook</div>
+          <div class="h">d13f61c9ee7c22</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">02:19:08Z</div>
+          <div class="act">Bash cargo test oauth</div>
+          <div class="h">8c4e2f1a9a3b27</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">02:22:31Z</div>
+          <div class="act">Read src/auth.rs</div>
+          <div class="h">7e5d1cb4c7a77d</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">02:28:19Z</div>
+          <div class="act">Edit src/auth.rs L88:104</div>
+          <div class="h">e5a20a44c1d938</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">02:31:52Z</div>
+          <div class="act">Bash cargo test oauth → FAIL</div>
+          <div class="h">fb11ab2c7e033d</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">03:04:47Z</div>
+          <div class="act">Grep "refresh_token"</div>
+          <div class="h">9a02c4f8e19a3b</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">03:41:22Z</div>
+          <div class="act">Edit src/session.rs L42:67</div>
+          <div class="h">2f1a8c4e9a3b2f</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">04:18:55Z</div>
+          <div class="act">Bash cargo test → PASS (128)</div>
+          <div class="h">4b2701aa72e4c5</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">04:54:11Z</div>
+          <div class="act">Bash git commit -m "fix..."</div>
+          <div class="h">a3f1b7c088d924</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+        <div class="slip">
+          <div class="t">05:03:04Z</div>
+          <div class="act">SessionEnd</div>
+          <div class="h">c4f8e19a3b2f7e</div>
+          <div class="s">ed25519 ✓</div>
+        </div>
+      </div>
+
+      <div class="outcome">
+        <div class="row"><span class="lbl">produced</span><span class="sha">a3f1b7c</span> <span class="msg">· fix: oauth token refresh race condition</span></div>
+        <div class="row"><span class="lbl">branch</span>main · <span class="lbl" style="margin-left: 4px;">files</span> <span class="file">src/auth.rs</span>, <span class="file">src/session.rs</span></div>
+        <div class="row"><span class="lbl">tests</span>128 passed · 0 failed · 0 skipped</div>
+        <div class="row"><span class="lbl">energy</span>214 / 1000 spent · 0 hold reserved</div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CHAPTER 2 — QUICK README REWRITE                -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="chapter">
+    <div class="chapter-head">
+      <div class="chapter-date">
+        <span class="day">wed · apr 10</span>
+        <span>14:22 — 14:38</span>
+        <span class="dur">16m</span>
+        <span class="actor">cursor · s3e</span>
+      </div>
+      <div class="chapter-verify">
+        5 receipts · <span class="ok">✓ verified</span>
+      </div>
+    </div>
+
+    <h2 class="chapter-title">Quick README rewrite</h2>
+
+    <div class="chapter-body">
+      Somebody on Discord said the install instructions were wrong on Linux —
+      missing the <code>libssl-dev</code> apt package. You swapped in a
+      platform-aware block, Cursor did the edit. Three edits, one commit,
+      push. Back to what you were doing in under 20 minutes.
+    </div>
+
+    <div class="receipts-toggle" onclick="this.parentElement.classList.toggle('open')">
+      <b>show 5 receipts</b>
+    </div>
+
+    <div class="receipts">
+      <div class="receipt-strip">
+        <div class="slip"><div class="t">14:22:08Z</div><div class="act">SessionStart</div><div class="h">b7c283aa11de</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">14:23:15Z</div><div class="act">Read README.md</div><div class="h">1e7c9aa60213</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">14:29:44Z</div><div class="act">Edit README.md L88:106</div><div class="h">33c8e48f0b2d</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">14:34:02Z</div><div class="act">Bash git commit</div><div class="h">a12d7700c4f8</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">14:38:51Z</div><div class="act">SessionEnd</div><div class="h">48fe01b7a3d6</div><div class="s">ed25519 ✓</div></div>
+      </div>
+
+      <div class="outcome">
+        <div class="row"><span class="lbl">produced</span><span class="sha">a12d770</span> <span class="msg">· docs: platform-aware install instructions</span></div>
+        <div class="row"><span class="lbl">branch</span>main · <span class="lbl" style="margin-left: 4px;">files</span> <span class="file">README.md</span></div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CHAPTER 3 — REFACTORED THE ADAPTER LAYER        -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="chapter">
+    <div class="chapter-head">
+      <div class="chapter-date">
+        <span class="day">fri · apr 12</span>
+        <span>09:04 — 11:47</span>
+        <span class="dur">2h 43m</span>
+        <span class="actor">claude-code · s6b</span>
+      </div>
+      <div class="chapter-verify">
+        28 receipts · <span class="ok">✓ verified</span>
+      </div>
+    </div>
+
+    <h2 class="chapter-title">Refactored the adapter layer</h2>
+
+    <div class="chapter-body">
+      The Cursor adapter had been living in <code>src/main.rs</code> as a
+      400-line <em>"I'll clean this later"</em>. You finally got sick of it.
+      Claude extracted it to <code>src/adapters/cursor/</code>, moved the typed
+      JSON responses into their own module, and updated 11 call sites.
+      Tests green, clippy clean, one commit. <em>Later</em> became now.
+    </div>
+
+    <div class="receipts-toggle" onclick="this.parentElement.classList.toggle('open')">
+      <b>show 28 receipts</b>
+    </div>
+
+    <div class="receipts">
+      <div class="receipt-strip">
+        <div class="slip"><div class="t">09:04:22Z</div><div class="act">SessionStart</div><div class="h">ee7c2251489a</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">09:06:18Z</div><div class="act">Read src/main.rs</div><div class="h">0d6f3b927337</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">09:11:44Z</div><div class="act">Write src/adapters/cursor/mod.rs</div><div class="h">c1ba8be08b11</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">09:14:51Z</div><div class="act">Write src/adapters/cursor/hook.rs</div><div class="h">0f6e49d2c5a3</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">09:17:03Z</div><div class="act">Edit src/main.rs L14:42</div><div class="h">f78d1b6c0e23</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">09:22:38Z</div><div class="act">Bash cargo check</div><div class="h">9ab46b2e031a</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip" style="color: #666; font-style: italic; text-align: center; line-height: 150px; flex: 0 0 120px;">+ 22 more</div>
+      </div>
+
+      <div class="outcome">
+        <div class="row"><span class="lbl">produced</span><span class="sha">ee7c225</span> <span class="msg">· refactor: extract cursor adapter to module</span></div>
+        <div class="row"><span class="lbl">branch</span>main · <span class="lbl" style="margin-left: 4px;">files</span> <span class="file">11 files changed · +412 / -387</span></div>
+        <div class="row"><span class="lbl">tests</span>249 passed · clippy clean</div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CHAPTER 4 — FAILED SESSION                      -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="chapter">
+    <div class="chapter-head">
+      <div class="chapter-date">
+        <span class="day">mon · apr 14</span>
+        <span>23:14 — 02:03</span>
+        <span class="dur">2h 49m</span>
+        <span class="actor">claude-code · s9c</span>
+      </div>
+      <div class="chapter-verify">
+        22 receipts · <span class="ok">✓ verified</span> · <span class="warn">unresolved</span>
+      </div>
+    </div>
+
+    <h2 class="chapter-title">Couldn't figure out why checkpoint #127 wouldn't anchor</h2>
+
+    <div class="chapter-body">
+      Checkpoint #127 kept bouncing off freetsa.org — <code>503</code> every 30
+      seconds for almost three hours. You tried switching TSA endpoints,
+      adjusting retry backoff, and reading every inch of <code>src/tsa.rs</code>.
+      Eventually you <em>fell asleep</em>. The checkpoint finally anchored at
+      06:41 the next morning, alone, without you. Not every chapter has a
+      hero moment. This one was just you learning that <code>freetsa.org</code>
+      has a bad hour sometimes.
+    </div>
+
+    <div class="receipts-toggle" onclick="this.parentElement.classList.toggle('open')">
+      <b>show 22 receipts</b> — including 9 failed retries
+    </div>
+
+    <div class="receipts">
+      <div class="receipt-strip">
+        <div class="slip"><div class="t">23:14:07Z</div><div class="act">SessionStart</div><div class="h">51489a0d6f3b</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">23:15:52Z</div><div class="act" style="color: #884433;">POST freetsa.org → 503</div><div class="h">33c8e48f0b2d</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">23:16:23Z</div><div class="act" style="color: #884433;">POST freetsa.org → 503</div><div class="h">2d1e7c9aa602</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">00:41:08Z</div><div class="act">Edit src/tsa.rs L112</div><div class="h">9273c1ba8be0</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">01:22:44Z</div><div class="act" style="color: #884433;">POST freetsa.org → 503</div><div class="h">ab73e20c11b8</div><div class="s">ed25519 ✓</div></div>
+        <div class="slip"><div class="t">02:03:19Z</div><div class="act">SessionEnd · user idle</div><div class="h">ef66f4401234</div><div class="s">ed25519 ✓</div></div>
+      </div>
+
+      <div class="outcome failed">
+        <div class="row"><span class="lbl">produced</span>(no commit)</div>
+        <div class="row"><span class="lbl">status</span>unresolved · anchored 06:41Z the next day (retry daemon)</div>
+        <div class="row"><span class="lbl">honest</span>sometimes your AI's best story is giving up and going to bed</div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══ FOOTER ═══ -->
+  <div class="page-foot">
+    stories written by <b>jack</b> · receipts signed by <b>ed25519</b> · time anchored by <b>rfc3161</b><br/>
+    every chapter is <em>verifiable</em> · every receipt is <em>signed</em> · nothing is judged, only recorded<br/>
+    <br/>
+    <b>proof of existence, not proof of content · right to history · kernel zero-network</b>
+  </div>
+
+</div>
+
+<script>
+  // No JS needed — toggle is inline onclick
+  // In a real impl, receipts lazy-load from IPC on expand
+</script>
+
+</body>
+</html>
