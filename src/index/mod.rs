@@ -27,6 +27,11 @@ use rusqlite::{Connection, OpenFlags};
 pub mod schema;
 pub mod sessions;
 pub mod signatures;
+// v2 (v0.7.0) per-block content table CRUD. The write-path consumers land in
+// P2b-3 (Codex ingest); until then the CRUD is exercised only by its own unit
+// tests. `allow(dead_code)` is removed once P2b-3 calls these in production.
+#[allow(dead_code)]
+pub mod turn_content;
 pub mod turns;
 
 /// Stamped on every row written by the Lane D scanner. Bump when the

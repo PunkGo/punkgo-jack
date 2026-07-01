@@ -144,6 +144,27 @@ CREATE TABLE IF NOT EXISTS pending_scans (
 const SQL_PENDING_SCANS_IDX: &str =
     "CREATE INDEX IF NOT EXISTS idx_pending_session ON pending_scans(session_id);";
 
+/// v2 (v0.7.0): per-content-block table. A single turn aggregates many blocks
+/// (a Codex turn spans avg 17 / max 534 `response_item`s — measured), so a
+/// single `turns.content_blob_hash` cannot represent it (AD3). Each block's
+/// body, when captured, lives in the sha256 blob store; this table holds only
+/// the hash reference + metadata — never raw text (privacy invariant intact).
+const SQL_TURN_CONTENT: &str = r#"
+CREATE TABLE IF NOT EXISTS turn_content (
+    turn_uuid     TEXT NOT NULL,
+    block_index   INTEGER NOT NULL,
+    kind          TEXT NOT NULL,
+    role          TEXT,
+    content_hash  TEXT,
+    is_error      INTEGER NOT NULL DEFAULT 0,
+    byte_len      INTEGER NOT NULL DEFAULT 0,
+    scanned_at    TEXT NOT NULL,
+
+    PRIMARY KEY (turn_uuid, block_index),
+    FOREIGN KEY (turn_uuid) REFERENCES turns(turn_uuid)
+);
+"#;
+
 /// Run every CREATE statement. Idempotent: safe to call on every open.
 ///
 /// Also explicitly disables foreign-key enforcement for this connection
@@ -182,7 +203,7 @@ pub fn init(conn: &Connection) -> Result<()> {
 }
 
 /// Current jack.db schema version. Bump when adding a migration step below.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Apply forward-only, incremental migrations to an existing jack.db, tracked
 /// via SQLite's `PRAGMA user_version`. Both a fresh DB (base tables just
@@ -254,6 +275,13 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         add_column_if_missing(conn, "turns", "source", "TEXT")?;
         add_column_if_missing(conn, "turns", "content_blob_hash", "TEXT")?;
     }
+    if current < 2 {
+        // v2 (v0.7.0) — per-block content table for multi-block turns (AD3).
+        // Created via migration (not the frozen base schema) so fresh and
+        // legacy DBs converge identically. IF NOT EXISTS keeps it idempotent.
+        conn.execute(SQL_TURN_CONTENT, [])
+            .context("v2 migration: create turn_content")?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
         .context("bumping user_version")?;
     Ok(())
@@ -315,6 +343,7 @@ mod tests {
         assert!(names.contains(&"turns".to_string()));
         assert!(names.contains(&"thinking_signatures".to_string()));
         assert!(names.contains(&"pending_scans".to_string()));
+        assert!(names.contains(&"turn_content".to_string()));
 
         // Verify a few indexes exist.
         let mut stmt = conn
@@ -364,6 +393,60 @@ mod tests {
         migrate(&conn).unwrap();
         assert!(column_exists(&conn, "turns", "source").unwrap());
         assert!(column_exists(&conn, "turns", "content_blob_hash").unwrap());
+    }
+
+    fn table_exists(conn: &Connection, table: &str) -> bool {
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        n > 0
+    }
+
+    #[test]
+    fn migrate_v1_db_gains_turn_content_at_v2() {
+        // Simulate a jack.db already at v1 (has source/content_blob_hash but
+        // no turn_content table). Migrating must add turn_content and reach v2.
+        let conn = fresh_conn();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.execute(SQL_SESSIONS, []).unwrap();
+        conn.execute(SQL_TURNS, []).unwrap();
+        add_column_if_missing(&conn, "turns", "source", "TEXT").unwrap();
+        add_column_if_missing(&conn, "turns", "content_blob_hash", "TEXT").unwrap();
+        conn.pragma_update(None, "user_version", 1i64).unwrap();
+        assert!(!table_exists(&conn, "turn_content"));
+
+        migrate(&conn).unwrap();
+
+        assert!(table_exists(&conn, "turn_content"));
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
+    }
+
+    #[test]
+    fn turn_content_table_has_expected_columns() {
+        let conn = fresh_conn();
+        init(&conn).unwrap();
+        for col in [
+            "turn_uuid",
+            "block_index",
+            "kind",
+            "role",
+            "content_hash",
+            "is_error",
+            "byte_len",
+            "scanned_at",
+        ] {
+            assert!(
+                column_exists(&conn, "turn_content", col).unwrap(),
+                "turn_content missing column {col}"
+            );
+        }
     }
 
     #[test]

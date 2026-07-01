@@ -49,6 +49,15 @@ pub struct TurnRow {
     pub thinking_block_count: i64,
     pub estimated_hidden_tokens: i64,
 
+    /// Which agent produced this turn: `claude-code` | `cursor` | `codex`.
+    /// `None` on legacy rows written before the v1 migration.
+    pub source: Option<String>,
+    /// sha256 blob reference for this turn's captured content, set only when
+    /// the capture policy stores full I/O (Codex `capture=full`). `None` =
+    /// metadata-only (Claude Code / Cursor default). Per-block hashes live in
+    /// `turn_content`; this is a whole-turn convenience reference.
+    pub content_blob_hash: Option<String>,
+
     pub kernel_event_id: Option<String>,
 
     pub scanned_at: String,
@@ -110,6 +119,7 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
             ephemeral_5m_tokens, ephemeral_1h_tokens, service_tier, stop_reason,
             content_blocks_meta, visible_text_bytes, visible_tool_use_bytes,
             thinking_block_count, estimated_hidden_tokens,
+            source, content_blob_hash,
             kernel_event_id, scanned_at, scanner_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
@@ -119,7 +129,8 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
             ?20, ?21, ?22, ?23,
             ?24, ?25, ?26,
             ?27, ?28,
-            ?29, ?30, ?31
+            ?29, ?30,
+            ?31, ?32, ?33
         )
         "#,
         params![
@@ -151,6 +162,8 @@ pub fn upsert_turn(conn: &Connection, turn: &TurnRow) -> Result<bool> {
             turn.visible_tool_use_bytes,
             turn.thinking_block_count,
             turn.estimated_hidden_tokens,
+            turn.source,
+            turn.content_blob_hash,
             turn.kernel_event_id,
             turn.scanned_at,
             SCANNER_VERSION,
@@ -190,6 +203,8 @@ fn row_to_turn(row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnRow> {
         visible_tool_use_bytes: row.get("visible_tool_use_bytes")?,
         thinking_block_count: row.get("thinking_block_count")?,
         estimated_hidden_tokens: row.get("estimated_hidden_tokens")?,
+        source: row.get("source")?,
+        content_blob_hash: row.get("content_blob_hash")?,
         kernel_event_id: row.get("kernel_event_id")?,
         scanned_at: row.get("scanned_at")?,
     })

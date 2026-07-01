@@ -921,6 +921,10 @@ fn upsert_turn_from_record(
         visible_tool_use_bytes,
         thinking_block_count,
         estimated_hidden_tokens,
+        // Claude Code path stays metadata-only (AD1): tag the source but never
+        // capture body content — no content_blob_hash, no turn_content rows.
+        source: Some("claude-code".to_string()),
+        content_blob_hash: None,
         kernel_event_id,
         scanned_at: now_iso(),
     };
