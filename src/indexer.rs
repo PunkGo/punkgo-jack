@@ -687,39 +687,47 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
 /// so one bad file cannot corrupt accumulated progress. Idempotent: a session
 /// is fully deleted (content → turns → signatures) before re-insert.
 pub fn run_codex_reindex() -> Result<ReindexReport> {
-    run_codex_reindex_inner(None)
+    run_codex_reindex_files(collect_codex_files(None)?)
 }
 
-/// Reindex just one Codex session's rollout file (the P3 hook path: a
-/// `SessionStart`/`Stop` hook passes its session_id and jack rescans only that
-/// file — AD5, rollout is truth). Full-file re-scan (not incremental); for very
-/// long sessions this re-reads the growing file each call. Incremental
-/// offset-based Codex scan is a future optimization (see TODOS.md).
+/// Reindex just one Codex session's rollout by filename-derived id (a fallback
+/// for the hook path when no transcript_path is provided). Still walks the tree
+/// to find the file; prefer [`run_codex_reindex_file`] when the path is known.
 pub fn run_codex_reindex_session(session_id: &str) -> Result<ReindexReport> {
-    run_codex_reindex_inner(Some(session_id))
+    run_codex_reindex_files(collect_codex_files(Some(session_id))?)
 }
 
-fn run_codex_reindex_inner(only_session: Option<&str>) -> Result<ReindexReport> {
-    use crate::adapters::codex::{self, CodexScanner};
+/// Reindex exactly one rollout file by path (the P3 hook path: the Codex hook
+/// stdin provides `transcript_path`, so scan it directly — no tree walk, no
+/// filename-id heuristic, no silent-no-op risk). AD5: rollout is truth.
+/// Full-file re-scan (not incremental); incremental offset scan is a future
+/// optimization (see TODOS.md).
+pub fn run_codex_reindex_file(path: PathBuf) -> Result<ReindexReport> {
+    run_codex_reindex_files(vec![path])
+}
+
+/// Resolve the rollout files to scan: all of them, or (for the id fallback)
+/// only those whose filename-derived id matches.
+fn collect_codex_files(only_session: Option<&str>) -> Result<Vec<PathBuf>> {
+    use crate::adapters::codex;
+    let root = codex::codex_sessions_root()?;
+    if !root.exists() {
+        warn!(path = %root.display(), "codex sessions dir does not exist; nothing to reindex");
+        return Ok(Vec::new());
+    }
+    let mut files = codex::walk_rollouts(&root);
+    if let Some(sid) = only_session {
+        files.retain(|p| codex::session_id_from_path(p) == sid);
+    }
+    Ok(files)
+}
+
+fn run_codex_reindex_files(files: Vec<PathBuf>) -> Result<ReindexReport> {
+    use crate::adapters::codex::CodexScanner;
     use crate::scan::{write_normalized_turn, write_session, SourceScanner};
 
     let started = Instant::now();
     let mut report = ReindexReport::default();
-
-    let root = codex::codex_sessions_root()?;
-    if !root.exists() {
-        warn!(path = %root.display(), "codex sessions dir does not exist; nothing to reindex");
-        report.duration_seconds = started.elapsed().as_secs_f64();
-        return Ok(report);
-    }
-
-    let mut files = codex::walk_rollouts(&root);
-    // P3 single-session filter: keep only the rollout file(s) whose
-    // filename-derived id matches (the uuid is embedded in the filename and
-    // equals session_meta.id). Cheap pre-filter before scanning.
-    if let Some(sid) = only_session {
-        files.retain(|p| codex::session_id_from_path(p) == sid);
-    }
     let total = files.len();
     info!(file_count = total, "codex reindex starting");
 

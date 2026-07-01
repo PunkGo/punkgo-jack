@@ -22,8 +22,15 @@ pub struct Config {
 /// Per-source content-capture policy (config-over-code; AD6). Values are
 /// `"full"` (store body content in the blob store, redacted) or `"metadata"`
 /// (metadata only — no bodies). Default: Codex captures full I/O, Claude Code
-/// and Cursor stay metadata-only. Override per source via `[capture]` in
+/// and Cursor stay metadata-only. Override via `[capture]` in
 /// `~/.punkgo/config.toml` or `PUNKGO_CAPTURE_<SOURCE>` env vars.
+///
+/// The `codex` knob is the live one. The `claude-code`/`cursor` knobs exist for
+/// symmetry but are effectively inert today: those scanners never extract body
+/// text (their `NormalizedBlock.content` is always `None`), so they are
+/// structurally metadata-only regardless of the policy value — flipping them to
+/// `full` would still store nothing. Full CC/Cursor capture would require those
+/// scanners to emit bodies first.
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct CaptureConfig {
     #[serde(default = "default_codex_capture")]

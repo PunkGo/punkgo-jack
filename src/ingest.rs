@@ -3,7 +3,7 @@ use std::io::Read;
 use anyhow::{bail, Context, Result};
 use punkgo_core::protocol::{RequestEnvelope, RequestType, ResponseEnvelope};
 use serde_json::{json, Value};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::adapters::{self, IngestEvent};
 use crate::ipc_client::{new_request_id, IpcClient};
@@ -73,17 +73,37 @@ fn run_inner(args: &IngestArgs) -> Result<()> {
     // fires. Bounded to the one session's file (never the full backfill, which
     // would block the hook).
     if args.source == "codex" {
-        match raw_json
+        // Prefer the exact file the hook names — `transcript_path` is the
+        // rollout path — so we scan it directly (no tree walk, no filename-id
+        // heuristic). Fall back to the session_id lookup only if it is absent.
+        let transcript_path = raw_json
+            .get("transcript_path")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        let session_id = raw_json
             .get("session_id")
             .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-        {
-            Some(sid) => {
-                if let Err(e) = crate::indexer::run_codex_reindex_session(sid) {
-                    debug!(error = %e, session = sid, "codex hook rescan failed (non-fatal)");
-                }
+            .filter(|s| !s.is_empty());
+        let outcome = match (transcript_path, session_id) {
+            (Some(tp), _) => Some(crate::indexer::run_codex_reindex_file(tp.into())),
+            (None, Some(sid)) => Some(crate::indexer::run_codex_reindex_session(sid)),
+            (None, None) => {
+                debug!("codex hook without transcript_path or session_id; skipping rescan");
+                None
             }
-            None => debug!("codex hook without session_id; skipping rescan"),
+        };
+        match outcome {
+            Some(Ok(r)) if r.files_scanned == 0 && r.files_failed == 0 => {
+                // Nothing matched — the core deliverable (recording) silently
+                // did nothing. Surface it rather than looking like success.
+                warn!(
+                    transcript_path = ?transcript_path,
+                    session_id = ?session_id,
+                    "codex hook rescan matched no rollout file"
+                );
+            }
+            Some(Err(e)) => debug!(error = %e, "codex hook rescan failed (non-fatal)"),
+            _ => {}
         }
         if !args.quiet {
             println!("{}", json!({ "ok": true }));
