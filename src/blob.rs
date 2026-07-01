@@ -80,6 +80,20 @@ pub fn store(content: &str) -> Result<String> {
     Ok(format!("sha256:{hash}"))
 }
 
+/// Retrieve captured content from the blob store by hash reference (the P4
+/// read path). Accepts both `sha256:<hex>` and bare hex. Returns `None` if the
+/// blob is absent (e.g. metadata-only source, or blob store pruned).
+pub fn load(hash_ref: &str) -> Result<Option<String>> {
+    let hex = hash_ref.strip_prefix("sha256:").unwrap_or(hash_ref);
+    let path = blob_path(hex)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read blob {}", path.display()))?;
+    Ok(Some(content))
+}
+
 /// Retrieve content from the blob store by hash reference.
 /// Accepts both "sha256:<hex>" format and bare hex.
 #[cfg(test)]
@@ -249,6 +263,29 @@ mod tests {
             assert!(refs.is_empty(), "key {key} should never be externalized");
             assert_eq!(result[*key], "x");
         }
+    }
+
+    /// P4 read path: `store` then `load` round-trips, and `load` on an unknown
+    /// hash returns `None` (not an error). Uses the data-dir lock + a tempdir.
+    #[test]
+    fn store_then_load_roundtrip() {
+        let _guard = crate::session::PUNKGO_DATA_DIR_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("PUNKGO_DATA_DIR");
+        std::env::set_var("PUNKGO_DATA_DIR", tmp.path());
+
+        let hash_ref = store("codex tool output body").unwrap();
+        assert!(hash_ref.starts_with("sha256:"));
+        assert_eq!(load(&hash_ref).unwrap().as_deref(), Some("codex tool output body"));
+        // Bare-hex form also resolves.
+        let bare = hash_ref.strip_prefix("sha256:").unwrap();
+        assert_eq!(load(bare).unwrap().as_deref(), Some("codex tool output body"));
+        // Unknown hash → None, not an error.
+        assert!(load("sha256:deadbeef").unwrap().is_none());
+
+        if let Some(v) = prev { std::env::set_var("PUNKGO_DATA_DIR", v); } else { std::env::remove_var("PUNKGO_DATA_DIR"); }
     }
 
     /// Integration test that uses filesystem — run with PUNKGO_DATA_DIR set to temp.

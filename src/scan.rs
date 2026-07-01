@@ -39,6 +39,20 @@ pub enum CapturePolicy {
     Full,
 }
 
+impl CapturePolicy {
+    /// Map a `[capture]` config value to a policy. Only the exact token
+    /// `"full"` (case-insensitive) enables body capture; anything else
+    /// (`"metadata"`, empty, typo) is treated as metadata-only — the
+    /// secret-safe default (never capture bodies on an ambiguous setting).
+    pub fn from_capture_str(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("full") {
+            CapturePolicy::Full
+        } else {
+            CapturePolicy::MetadataOnly
+        }
+    }
+}
+
 /// Per-turn token usage, source-neutral.
 #[derive(Debug, Clone, Default)]
 pub struct NormalizedUsage {

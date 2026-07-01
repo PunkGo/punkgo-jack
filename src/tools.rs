@@ -778,9 +778,37 @@ pub fn punkgo_turn_detail(params: PunkgoTurnDetailParams) -> Result<CallToolResu
         // sees real structure rather than a quoted string.
         let cbm: serde_json::Value =
             serde_json::from_str(&turn.content_blocks_meta).unwrap_or(json!([]));
+
+        // P4: surface captured content. For sources that store full I/O
+        // (Codex), turn_content rows carry per-block hashes; load each body
+        // from the blob store (already redacted at capture time). Sources under
+        // metadata-only capture (Claude Code) have no turn_content rows, so
+        // `content_blocks` is empty and only metadata is returned — unchanged.
+        let blocks = crate::index::turn_content::list_content_for_turn(&conn, &params.turn_uuid)?;
+        let content_blocks: Vec<serde_json::Value> = blocks
+            .iter()
+            .map(|b| {
+                let content = b
+                    .content_hash
+                    .as_deref()
+                    .and_then(|h| crate::blob::load(h).ok().flatten());
+                json!({
+                    "block_index": b.block_index,
+                    "kind": b.kind,
+                    "role": b.role,
+                    "is_error": b.is_error,
+                    "byte_len": b.byte_len,
+                    "content_hash": b.content_hash,
+                    // Body when captured + resolvable; null for opaque
+                    "content": content,
+                })
+            })
+            .collect();
+
         Ok(ok_tool_result(json!({
             "turn": turn,
             "content_blocks_meta": cbm,
+            "content_blocks": content_blocks,
             "thinking_signatures": signatures,
         })))
     })();
@@ -839,11 +867,36 @@ pub fn punkgo_hidden_tokens(params: PunkgoHiddenTokensParams) -> Result<CallTool
             breakdown.insert(row.0, row.1);
         }
 
+        // E5: Codex reasoning analytics. Codex reasoning bodies are opaque
+        // (encrypted, never stored) but their block count + opaque byte size
+        // are recorded per block in turn_content — surface them symmetric with
+        // the Claude thinking-signature stats. 0 when no Codex turns match.
+        let mut rsql = String::from(
+            "SELECT COUNT(*), COALESCE(SUM(tc.byte_len), 0) \
+             FROM turn_content tc JOIN turns t ON tc.turn_uuid = t.turn_uuid \
+             WHERE tc.kind = 'reasoning'",
+        );
+        let mut rargs: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(sid) = &params.session_id {
+            rsql.push_str(" AND t.session_id = ?");
+            rargs.push(rusqlite::types::Value::Text(sid.clone()));
+        }
+        if let Some(since) = &params.since {
+            rsql.push_str(" AND t.timestamp >= ?");
+            rargs.push(rusqlite::types::Value::Text(since.clone()));
+        }
+        let (reasoning_blocks, reasoning_bytes): (i64, i64) =
+            conn.query_row(&rsql, rusqlite::params_from_iter(rargs.iter()), |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
+
         Ok(ok_tool_result(json!({
             "total_hidden_tokens_est": hidden,
             "total_thinking_blocks": thinking_blocks,
             "session_count": session_count,
             "breakdown_by_variant": breakdown,
+            "codex_reasoning_blocks": reasoning_blocks,
+            "codex_reasoning_opaque_bytes": reasoning_bytes,
         })))
     })();
     finalize_tool_call(result)

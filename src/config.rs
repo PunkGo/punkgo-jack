@@ -15,6 +15,54 @@ use tracing::debug;
 pub struct Config {
     #[serde(default)]
     pub tsa: TsaConfig,
+    #[serde(default)]
+    pub capture: CaptureConfig,
+}
+
+/// Per-source content-capture policy (config-over-code; AD6). Values are
+/// `"full"` (store body content in the blob store, redacted) or `"metadata"`
+/// (metadata only — no bodies). Default: Codex captures full I/O, Claude Code
+/// and Cursor stay metadata-only. Override per source via `[capture]` in
+/// `~/.punkgo/config.toml` or `PUNKGO_CAPTURE_<SOURCE>` env vars.
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct CaptureConfig {
+    #[serde(default = "default_codex_capture")]
+    pub codex: String,
+    #[serde(default = "default_metadata_capture", rename = "claude-code")]
+    pub claude_code: String,
+    #[serde(default = "default_metadata_capture")]
+    pub cursor: String,
+}
+
+fn default_codex_capture() -> String {
+    "full".to_string()
+}
+
+fn default_metadata_capture() -> String {
+    "metadata".to_string()
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            codex: default_codex_capture(),
+            claude_code: default_metadata_capture(),
+            cursor: default_metadata_capture(),
+        }
+    }
+}
+
+impl CaptureConfig {
+    /// The capture policy string for a source name (unknown → `"metadata"`,
+    /// the safe default: never capture bodies for a source we don't recognize).
+    pub fn policy_for(&self, source: &str) -> &str {
+        match source {
+            "codex" => &self.codex,
+            "claude-code" => &self.claude_code,
+            "cursor" => &self.cursor,
+            _ => "metadata",
+        }
+    }
 }
 
 /// TSA anchoring configuration.
@@ -105,6 +153,15 @@ fn apply_env_overrides(config: &mut Config) {
             config.tsa.min_interval_secs = n;
         }
     }
+    if let Ok(v) = std::env::var("PUNKGO_CAPTURE_CODEX") {
+        config.capture.codex = v;
+    }
+    if let Ok(v) = std::env::var("PUNKGO_CAPTURE_CLAUDE_CODE") {
+        config.capture.claude_code = v;
+    }
+    if let Ok(v) = std::env::var("PUNKGO_CAPTURE_CURSOR") {
+        config.capture.cursor = v;
+    }
 }
 
 fn config_file_path() -> Option<PathBuf> {
@@ -178,6 +235,39 @@ min_interval_secs = 0
 
         // Cleanup
         std::env::remove_var("PUNKGO_TSA_ENABLED");
+    }
+
+    #[test]
+    fn capture_defaults_codex_full_others_metadata() {
+        let c = CaptureConfig::default();
+        assert_eq!(c.policy_for("codex"), "full");
+        assert_eq!(c.policy_for("claude-code"), "metadata");
+        assert_eq!(c.policy_for("cursor"), "metadata");
+        // Unknown source → metadata (secret-safe default).
+        assert_eq!(c.policy_for("windsurf"), "metadata");
+    }
+
+    #[test]
+    fn capture_parses_from_toml_with_hyphen_key() {
+        let toml_str = r#"
+[capture]
+codex = "metadata"
+claude-code = "full"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.capture.policy_for("codex"), "metadata");
+        assert_eq!(config.capture.policy_for("claude-code"), "full");
+        // Unset key falls back to its default.
+        assert_eq!(config.capture.policy_for("cursor"), "metadata");
+    }
+
+    #[test]
+    fn capture_env_override() {
+        let mut config = Config::default();
+        std::env::set_var("PUNKGO_CAPTURE_CODEX", "metadata");
+        apply_env_overrides(&mut config);
+        assert_eq!(config.capture.policy_for("codex"), "metadata");
+        std::env::remove_var("PUNKGO_CAPTURE_CODEX");
     }
 
     #[test]

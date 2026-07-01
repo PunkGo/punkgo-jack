@@ -668,22 +668,34 @@ use crate::scan::{
     CapturePolicy, NormalizedBlock, NormalizedSession, NormalizedTurn, ScanResult, SourceScanner,
 };
 
-/// Parses Codex rollout files into the source-neutral [`ScanResult`]. Captures
-/// full I/O (`CapturePolicy::Full`); every body is passed through a
-/// [`Redactor`] before it leaves this module (AD6).
-///
-/// `Default` builds a redactor from the current environment
-/// (`Redactor::default` == `Redactor::from_env`).
-#[derive(Default)]
+/// Parses Codex rollout files into the source-neutral [`ScanResult`]. Every
+/// captured body is passed through a [`Redactor`] before it leaves this module
+/// (AD6). The capture policy is read from config (`[capture] codex`,
+/// default `full`) — config-over-code, not hardcoded.
 pub struct CodexScanner {
     redactor: Redactor,
+    policy: CapturePolicy,
+}
+
+impl Default for CodexScanner {
+    fn default() -> Self {
+        let cfg = crate::config::load_config();
+        Self {
+            redactor: Redactor::from_env(),
+            policy: CapturePolicy::from_capture_str(cfg.capture.policy_for("codex")),
+        }
+    }
 }
 
 impl CodexScanner {
-    /// Build a scanner with an explicit redactor (tests).
+    /// Build a scanner with an explicit redactor (tests). Uses `Full` capture
+    /// so redaction/content paths are exercised.
     #[cfg(test)]
     pub fn with_redactor(redactor: Redactor) -> Self {
-        Self { redactor }
+        Self {
+            redactor,
+            policy: CapturePolicy::Full,
+        }
     }
 }
 
@@ -693,7 +705,7 @@ impl SourceScanner for CodexScanner {
     }
 
     fn capture_policy(&self) -> CapturePolicy {
-        CapturePolicy::Full
+        self.policy
     }
 
     fn scan_file(&self, path: &Path) -> Result<ScanResult> {

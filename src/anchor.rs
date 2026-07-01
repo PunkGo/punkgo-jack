@@ -297,6 +297,7 @@ mod tests {
                 min_interval_secs: 0,
                 ..Default::default()
             },
+            ..Default::default()
         };
         // burst mode (min_interval=0) always allows anchoring
         assert!(should_anchor(1, false, &config).unwrap());

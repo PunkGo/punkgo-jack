@@ -84,7 +84,10 @@ pub fn list_content_for_turn(conn: &Connection, turn_uuid: &str) -> Result<Vec<T
     Ok(rows)
 }
 
-/// Delete all content blocks for a turn (used before re-inserting on re-scan).
+/// Delete all content blocks for a turn. CRUD-complete; the reindex path uses
+/// `delete_content_for_session`, so this is currently exercised only by tests
+/// and reserved for a future single-turn purge (e.g. an MCP delete).
+#[allow(dead_code)]
 pub fn delete_content_for_turn(conn: &Connection, turn_uuid: &str) -> Result<usize> {
     let n = conn
         .execute(

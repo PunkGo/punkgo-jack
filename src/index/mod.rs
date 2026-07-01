@@ -27,11 +27,8 @@ use rusqlite::{Connection, OpenFlags};
 pub mod schema;
 pub mod sessions;
 pub mod signatures;
-// v2 (v0.7.0) per-block content table CRUD. Write-path consumers (upsert +
-// delete_content_for_session) are live as of P2b-3; the read helpers
-// (list_content_for_turn, delete_content_for_turn) are wired by P4 (MCP
-// turn_detail). `allow(dead_code)` is removed once P4 lands.
-#[allow(dead_code)]
+// v2 (v0.7.0) per-block content table CRUD. upsert + delete_content_for_session
+// (reindex) + list_content_for_turn (P4 MCP turn_detail) are all live.
 pub mod turn_content;
 pub mod turns;
 
