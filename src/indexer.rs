@@ -27,14 +27,13 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tracing::{debug, info, warn};
 
 use crate::index::{
     self, now_iso,
     sessions::{self, SessionAggregates, SessionRow},
     signatures::{self as sig_idx, SignatureRow},
-    turns::{self, TurnRow},
+    turn_content, turns,
 };
 use crate::signature::parse_thinking_signature;
 use crate::transcript::scanner::{ContentBlockRecord, TranscriptScanner, TurnRecord};
@@ -532,6 +531,12 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
             // canonical session_id (parent + subagents).
             let did_delete = if !already_deleted {
                 sig_idx::delete_signatures_for_session(&tx, sid)?;
+                // Must run BEFORE deleting turns: delete_content_for_session
+                // finds its target turn_uuids by joining on `turns`, so once
+                // the turns rows are gone the join matches nothing and any
+                // captured content_blocks would orphan (FKs are off — nothing
+                // else GCs them). Eng review P2b-2 finding (2026-07-01).
+                turn_content::delete_content_for_session(&tx, sid)?;
                 turns::delete_turns_for_session(&tx, sid)?;
                 true
             } else {
@@ -790,146 +795,97 @@ fn ensure_session_exists(
     sessions::upsert_session(conn, &row)
 }
 
-/// Build a privacy-safe `content_blocks_meta` JSON array from a TurnRecord.
-/// Each element carries ONLY: idx, kind, byte_len, content_hash,
-/// signature_present. NEVER raw text.
-fn build_content_blocks_meta(record: &TurnRecord) -> String {
-    let arr: Vec<serde_json::Value> = record
-        .content_blocks
-        .iter()
-        .enumerate()
-        .map(|(idx, block)| match block {
-            // PRIVACY: byte_len + hash only. Source text never copied here.
-            ContentBlockRecord::Text {
-                byte_len,
-                content_hash,
-            } => json!({
-                "idx": idx,
-                "kind": "text",
-                "byte_len": byte_len,
-                "content_hash": content_hash,
-                "signature_present": false,
-            }),
-            ContentBlockRecord::ToolUse {
-                name,
-                byte_len,
-                content_hash,
-            } => json!({
-                "idx": idx,
-                "kind": "tool_use",
-                "tool_name": name,
-                "byte_len": byte_len,
-                "content_hash": content_hash,
-                "signature_present": false,
-            }),
-            ContentBlockRecord::ToolResult {
-                byte_len,
-                content_hash,
-                is_error,
-            } => json!({
-                "idx": idx,
-                "kind": "tool_result",
-                "byte_len": byte_len,
-                "content_hash": content_hash,
-                "is_error": is_error,
-                "signature_present": false,
-            }),
-            // P2 review fix: drop `signature_bytes` (already stored in
-            // thinking_signatures.signature_bytes — no loss) and add
-            // explicit `content_hash: null` so every block kind has the
-            // same shape. Downstream parsers rely on field-set uniformity.
-            ContentBlockRecord::Thinking {
-                thinking_byte_len, ..
-            } => json!({
-                "idx": idx,
-                "kind": "thinking",
-                "byte_len": thinking_byte_len,
-                "content_hash": serde_json::Value::Null,
-                "signature_present": true,
-            }),
-        })
-        .collect();
-    serde_json::Value::Array(arr).to_string()
-}
-
 /// Returns `true` if the turn was actually written, `false` if skipped
 /// (fork-safe dedup: turn_uuid already belongs to a different session).
+///
+/// AD1: the Claude Code path now flows through the shared source-neutral write
+/// core (`crate::scan::write_normalized_turn`) rather than a bespoke `TurnRow` build,
+/// so there is one turn-write path across sources. CC produces blocks with
+/// `content = None` (bodies are never extracted) and uses `MetadataOnly`, so
+/// no blob is written and no `turn_content` row is created — behaviour is
+/// identical to the pre-AD1 path.
 fn upsert_turn_from_record(
     conn: &Connection,
     record: &TurnRecord,
     turn_order: i64,
     kernel_event_id: Option<String>,
 ) -> Result<bool> {
+    let turn = normalized_turn_from_cc_record(record);
+    crate::scan::write_normalized_turn(
+        conn,
+        &turn,
+        turn_order,
+        crate::scan::CapturePolicy::MetadataOnly,
+        kernel_event_id,
+    )
+}
+
+/// Map a Claude Code `TurnRecord` into a source-neutral `NormalizedTurn`.
+/// PRIVACY: `content` is deliberately left `None` on every block — the CC
+/// scanner never extracts body text, so no path can persist it.
+fn normalized_turn_from_cc_record(record: &TurnRecord) -> crate::scan::NormalizedTurn {
     let usage = record.usage.as_ref();
-    let visible_text_bytes: i64 = record
+    let blocks = record
         .content_blocks
         .iter()
         .map(|b| match b {
-            ContentBlockRecord::Text { byte_len, .. } => *byte_len as i64,
-            _ => 0,
+            ContentBlockRecord::Text { byte_len, .. } => crate::scan::NormalizedBlock {
+                kind: "text".to_string(),
+                byte_len: *byte_len,
+                ..Default::default()
+            },
+            ContentBlockRecord::ToolUse {
+                name, byte_len, ..
+            } => crate::scan::NormalizedBlock {
+                kind: "tool_use".to_string(),
+                tool_name: Some(name.clone()),
+                byte_len: *byte_len,
+                ..Default::default()
+            },
+            ContentBlockRecord::ToolResult {
+                byte_len, is_error, ..
+            } => crate::scan::NormalizedBlock {
+                kind: "tool_result".to_string(),
+                is_error: *is_error,
+                byte_len: *byte_len,
+                ..Default::default()
+            },
+            ContentBlockRecord::Thinking {
+                thinking_byte_len, ..
+            } => crate::scan::NormalizedBlock {
+                kind: "thinking".to_string(),
+                signature_present: true,
+                byte_len: *thinking_byte_len,
+                ..Default::default()
+            },
         })
-        .sum();
-    let visible_tool_use_bytes: i64 = record
-        .content_blocks
-        .iter()
-        .map(|b| match b {
-            ContentBlockRecord::ToolUse { byte_len, .. } => *byte_len as i64,
-            _ => 0,
-        })
-        .sum();
-    let thinking_block_count: i64 = record
-        .content_blocks
-        .iter()
-        .filter(|b| matches!(b, ContentBlockRecord::Thinking { .. }))
-        .count() as i64;
+        .collect();
 
-    let visible_bytes = visible_text_bytes + visible_tool_use_bytes;
-    // ceil(visible_bytes / 4) using stable integer math.
-    let visible_tokens_est = (visible_bytes + 3) / 4;
-    let output_tokens = usage
-        .and_then(|u| u.output_tokens.map(|x| x as i64))
-        .unwrap_or(0);
-    let estimated_hidden_tokens = (output_tokens - visible_tokens_est).max(0);
-
-    let row = TurnRow {
-        // PRIVACY: metadata only, no body text.
+    crate::scan::NormalizedTurn {
+        source: "claude-code".to_string(),
         turn_uuid: record.turn_uuid.clone(),
         session_id: record.session_id.clone(),
         parent_turn_uuid: record.parent_turn_uuid.clone(),
-        turn_order,
         role: record.role.clone(),
         timestamp: record.timestamp.clone(),
         cwd: record.cwd.clone(),
         git_branch: record.git_branch.clone(),
         is_sidechain: record.is_sidechain,
         slug: record.slug.clone(),
-        claude_code_version: record.claude_code_version.clone(),
+        tool_version: record.claude_code_version.clone(),
         request_id: record.request_id.clone(),
         message_id: record.message_id.clone(),
         model: record.model.clone(),
         model_variant: record.model_variant.clone(),
-        input_tokens: usage.and_then(|u| u.input_tokens.map(|x| x as i64)),
-        output_tokens: usage.and_then(|u| u.output_tokens.map(|x| x as i64)),
-        cache_read_tokens: usage.and_then(|u| u.cache_read_input_tokens.map(|x| x as i64)),
-        cache_creation_tokens: usage.and_then(|u| u.cache_creation_input_tokens.map(|x| x as i64)),
-        ephemeral_5m_tokens: None,
-        ephemeral_1h_tokens: None,
-        service_tier: None,
-        stop_reason: None,
-        content_blocks_meta: build_content_blocks_meta(record),
-        visible_text_bytes,
-        visible_tool_use_bytes,
-        thinking_block_count,
-        estimated_hidden_tokens,
-        // Claude Code path stays metadata-only (AD1): tag the source but never
-        // capture body content — no content_blob_hash, no turn_content rows.
-        source: Some("claude-code".to_string()),
-        content_blob_hash: None,
-        kernel_event_id,
-        scanned_at: now_iso(),
-    };
-    // PRIVACY: metadata only, no body text.
-    turns::upsert_turn(conn, &row) // returns true if written, false if fork-skipped
+        usage: Some(crate::scan::NormalizedUsage {
+            input_tokens: usage.and_then(|u| u.input_tokens.map(|x| x as i64)),
+            output_tokens: usage.and_then(|u| u.output_tokens.map(|x| x as i64)),
+            cache_read_tokens: usage.and_then(|u| u.cache_read_input_tokens.map(|x| x as i64)),
+            cache_creation_tokens: usage
+                .and_then(|u| u.cache_creation_input_tokens.map(|x| x as i64)),
+        }),
+        blocks,
+    }
 }
 
 fn upsert_signatures_from_record(conn: &Connection, record: &TurnRecord) -> Result<usize> {

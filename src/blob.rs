@@ -60,6 +60,26 @@ pub fn externalize(content: &str) -> Result<Option<String>> {
     Ok(Some(format!("sha256:{hash}")))
 }
 
+/// Store content in the blob store unconditionally (no size threshold) and
+/// return its `sha256:<hex>` reference. Content-addressed: a blob that already
+/// exists is not rewritten (dedup). Unlike [`externalize`], this never keeps
+/// content "inline" — it is the capture primitive for full I/O recording
+/// (Codex `capture=full`), where even a short turn body must be retrievable by
+/// hash. The caller is responsible for any redaction before calling.
+pub fn store(content: &str) -> Result<String> {
+    let hash = hash_bytes(content.as_bytes());
+    let blob_path = blob_path(&hash)?;
+    if !blob_path.exists() {
+        if let Some(parent) = blob_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create blob dir {}", parent.display()))?;
+        }
+        std::fs::write(&blob_path, content.as_bytes())
+            .with_context(|| format!("failed to write blob {}", blob_path.display()))?;
+    }
+    Ok(format!("sha256:{hash}"))
+}
+
 /// Retrieve content from the blob store by hash reference.
 /// Accepts both "sha256:<hex>" format and bare hex.
 #[cfg(test)]

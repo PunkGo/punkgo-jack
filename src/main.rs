@@ -16,6 +16,7 @@ mod ipc_client;
 mod mcp;
 mod presence;
 mod report;
+mod scan;
 mod session;
 mod setup;
 mod spillover;
