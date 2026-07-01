@@ -220,6 +220,88 @@ impl HookAdapter for ClaudeCodeAdapter {
                     source: "claude-code".into(),
                 });
             }
+            // v0.7.0 Workstream A — 4 new human-in-the-loop decision-point
+            // hooks (fields verified against code.claude.com/docs/en/hooks).
+            "PermissionRequest" => {
+                // A permission dialog appeared. Carries the tool + input plus
+                // the decision-context enrichment fields (via build_metadata).
+                let meta = build_metadata(raw);
+                let tool_name = str_field(raw, "tool_name");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("permission_request:{tool_name}"),
+                    event_type: "permission_request".into(),
+                    content: format!("Permission requested for tool: {tool_name}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "Elicitation" => {
+                // An MCP server requested user input during a tool call.
+                let mut meta = build_session_metadata(raw);
+                if let Some(v) = raw.get("server") {
+                    meta.insert("server".into(), v.clone());
+                }
+                let server = str_field(raw, "server");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("elicitation:{server}"),
+                    event_type: "elicitation".into(),
+                    content: format!("MCP elicitation from {server}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "ElicitationResult" => {
+                // The user responded to an MCP elicitation. `content` is the
+                // user's free-text response — externalize (may be large).
+                let mut meta = build_session_metadata(raw);
+                if let Some(v) = raw.get("server") {
+                    meta.insert("server".into(), v.clone());
+                }
+                if let Some(s) = raw.get("content").and_then(Value::as_str) {
+                    let value = crate::blob::externalize_or_inline(
+                        "elicitation_response",
+                        s,
+                        max_inline_bytes(),
+                    )
+                    .unwrap_or_else(|_| json!({ "inline": s }));
+                    meta.insert("elicitation_response".into(), value);
+                }
+                let server = str_field(raw, "server");
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: format!("elicitation_result:{server}"),
+                    event_type: "elicitation_result".into(),
+                    content: format!("Elicitation response to {server}"),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
+            "MessageDisplay" => {
+                // Display-only: an assistant message was shown. `message` is
+                // the assistant text — externalize the full body, preview the
+                // label. No permission_mode on this event.
+                let mut meta = build_session_metadata(raw);
+                let msg = str_field(raw, "message");
+                if !msg.is_empty() {
+                    let value = crate::blob::externalize_or_inline(
+                        "display_message",
+                        msg,
+                        max_inline_bytes(),
+                    )
+                    .unwrap_or_else(|_| json!({ "inline": msg }));
+                    meta.insert("display_message".into(), value);
+                }
+                return Ok(IngestEvent {
+                    actor_id: "claude-code".into(),
+                    target: "message:display".into(),
+                    event_type: "message_display".into(),
+                    content: format!("Message displayed: {}", display_preview(msg, 200)),
+                    metadata: meta,
+                    source: "claude-code".into(),
+                });
+            }
             "UserPromptSubmit" => {
                 let mut meta = build_prompt_metadata(raw);
                 let image_count = meta.get("image_count").and_then(Value::as_u64).unwrap_or(0);
@@ -378,6 +460,10 @@ fn build_metadata_with_mode(raw: &Value, capture_mode: &str) -> BTreeMap<String,
             meta.insert(dst.into(), v.clone());
         }
     }
+
+    // v0.7.0 payload enrichment on tool events (effort/prompt_id/
+    // permission_mode/agent_id/agent_type — no new hook needed).
+    enrich_decision_metadata(raw, &mut meta);
 
     // tool_input: externalize large fields to blob store, keep hashes inline.
     if let Some(v) = raw.get("tool_input") {
@@ -678,7 +764,26 @@ fn build_session_metadata(raw: &Value) -> BTreeMap<String, Value> {
             meta.insert(key.into(), v.clone());
         }
     }
+    // v0.7.0 enrichment: `model` is only ever present on SessionStart; other
+    // session-style events simply won't carry the key.
+    if let Some(v) = raw.get("model") {
+        meta.insert("model".into(), v.clone());
+    }
+    enrich_decision_metadata(raw, &mut meta);
     meta
+}
+
+/// v0.7.0 payload enrichment: decision-context fields Claude Code attaches to
+/// many hooks — `prompt_id`, `permission_mode`, `agent_id`, `agent_type`,
+/// `effort`. Each is inserted only when present, so events that lack a field
+/// (e.g. MessageDisplay has no `permission_mode`) are unaffected. No new hook
+/// is required — these are already in the existing hook payloads.
+fn enrich_decision_metadata(raw: &Value, meta: &mut BTreeMap<String, Value>) {
+    for key in ["prompt_id", "permission_mode", "agent_id", "agent_type", "effort"] {
+        if let Some(v) = raw.get(key) {
+            meta.insert(key.into(), v.clone());
+        }
+    }
 }
 
 /// Extract a string field from a JSON value, returning "" if missing.
@@ -1363,6 +1468,104 @@ mod tests {
         assert_eq!(event.target, "permission_denied:Bash");
         assert!(event.content.contains("Bash"));
         assert_eq!(event.metadata.get("reason"), Some(&json!("user_declined")));
+    }
+
+    // ---- v0.7.0 Workstream A: 4 new hooks + payload enrichment ----
+
+    #[test]
+    fn transform_permission_request() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": "ses_pr",
+            "cwd": "/p",
+            "tool_name": "Bash",
+            "tool_input": { "command": "rm -rf /tmp/x" },
+            "permission_mode": "default",
+            "prompt_id": "prm_1",
+            "agent_id": "agent_9",
+            "agent_type": "code-reviewer",
+            "effort": "high"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "permission_request");
+        assert_eq!(event.target, "permission_request:Bash");
+        // Enrichment via build_metadata.
+        assert_eq!(event.metadata.get("permission_mode"), Some(&json!("default")));
+        assert_eq!(event.metadata.get("prompt_id"), Some(&json!("prm_1")));
+        assert_eq!(event.metadata.get("agent_id"), Some(&json!("agent_9")));
+        assert_eq!(event.metadata.get("agent_type"), Some(&json!("code-reviewer")));
+        assert_eq!(event.metadata.get("effort"), Some(&json!("high")));
+    }
+
+    #[test]
+    fn transform_elicitation_and_result() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "Elicitation",
+            "session_id": "ses_e", "cwd": "/p",
+            "server": "svelte_mcp", "prompt_id": "prm_2"
+        });
+        let e = adapter.transform(&raw).unwrap();
+        assert_eq!(e.event_type, "elicitation");
+        assert_eq!(e.target, "elicitation:svelte_mcp");
+        assert_eq!(e.metadata.get("server"), Some(&json!("svelte_mcp")));
+        assert_eq!(e.metadata.get("prompt_id"), Some(&json!("prm_2")));
+
+        let raw2 = json!({
+            "hook_event_name": "ElicitationResult",
+            "session_id": "ses_e", "cwd": "/p",
+            "server": "svelte_mcp", "content": "yes, use the dark theme"
+        });
+        let r = adapter.transform(&raw2).unwrap();
+        assert_eq!(r.event_type, "elicitation_result");
+        assert_eq!(r.target, "elicitation_result:svelte_mcp");
+        // User response externalized (small → inline).
+        let resp = r.metadata.get("elicitation_response").expect("response stored");
+        assert_eq!(resp.get("inline").and_then(Value::as_str), Some("yes, use the dark theme"));
+    }
+
+    #[test]
+    fn transform_message_display() {
+        let adapter = ClaudeCodeAdapter;
+        let raw = json!({
+            "hook_event_name": "MessageDisplay",
+            "session_id": "ses_md", "cwd": "/p",
+            "message": "Here is the plan.",
+            "prompt_id": "prm_3", "agent_id": "a1"
+        });
+        let event = adapter.transform(&raw).unwrap();
+        assert_eq!(event.event_type, "message_display");
+        assert_eq!(event.target, "message:display");
+        assert!(event.content.starts_with("Message displayed: "));
+        let dm = event.metadata.get("display_message").expect("message stored");
+        assert_eq!(dm.get("inline").and_then(Value::as_str), Some("Here is the plan."));
+        // MessageDisplay has no permission_mode (per docs) — must not fabricate one.
+        assert!(!event.metadata.contains_key("permission_mode"));
+    }
+
+    #[test]
+    fn tool_event_enrichment_and_session_model() {
+        let adapter = ClaudeCodeAdapter;
+        // Enrichment on an existing tool event.
+        let tool = json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash", "tool_input": { "command": "ls" },
+            "session_id": "s", "effort": "medium", "prompt_id": "p1",
+            "permission_mode": "acceptEdits", "agent_type": "root"
+        });
+        let e = adapter.transform(&tool).unwrap();
+        assert_eq!(e.metadata.get("effort"), Some(&json!("medium")));
+        assert_eq!(e.metadata.get("prompt_id"), Some(&json!("p1")));
+        assert_eq!(e.metadata.get("permission_mode"), Some(&json!("acceptEdits")));
+
+        // SessionStart captures model.
+        let ss = json!({
+            "hook_event_name": "SessionStart", "session_id": "s",
+            "cwd": "/p", "model": "claude-sonnet-5"
+        });
+        let se = adapter.transform(&ss).unwrap();
+        assert_eq!(se.metadata.get("model"), Some(&json!("claude-sonnet-5")));
     }
 
     /// Privacy AND preservation audit: all 5 new event types must

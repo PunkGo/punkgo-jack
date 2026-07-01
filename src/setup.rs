@@ -124,6 +124,25 @@ fn hook_events(exe: &str, source: &str) -> Vec<(&'static str, Vec<String>)> {
             "PermissionDenied",
             vec![format!("{exe_cmd} ingest --source {source} --quiet")],
         ),
+        // v0.7.0 Workstream A — 4 human-in-the-loop decision-point hooks
+        // (Claude Code only; cursor_event_name filters them out). These record
+        // permission dialogs, MCP elicitations, and displayed messages.
+        (
+            "PermissionRequest",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        (
+            "Elicitation",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        (
+            "ElicitationResult",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
+        (
+            "MessageDisplay",
+            vec![format!("{exe_cmd} ingest --source {source} --quiet")],
+        ),
     ]
 }
 
@@ -274,6 +293,11 @@ fn cursor_event_name(claude_name: &str) -> Option<&str> {
         "PostCompact" => return None,
         "StopFailure" => return None,
         "PermissionDenied" => return None,
+        // v0.7.0 Workstream A — Claude Code only.
+        "PermissionRequest" => return None,
+        "Elicitation" => return None,
+        "ElicitationResult" => return None,
+        "MessageDisplay" => return None,
         // IMPORTANT: new Claude Code-only events must return None above.
         // Falling through passes PascalCase name to Cursor, which silently ignores it.
         other => other,
@@ -1544,8 +1568,8 @@ mod tests {
         let (installed, _skipped) = install_claude_code_hooks_at_path(exe_str, &settings_path)
             .expect("install_claude_code_hooks_at_path should succeed");
         assert_eq!(
-            installed, 15,
-            "expected 15 hooks installed, got {installed}"
+            installed, 19,
+            "expected 19 hooks installed, got {installed}"
         );
 
         let content = std::fs::read_to_string(&settings_path).unwrap();
@@ -1553,7 +1577,7 @@ mod tests {
         let hooks = settings["hooks"]
             .as_object()
             .expect("hooks object must exist after install");
-        assert_eq!(hooks.len(), 15);
+        assert_eq!(hooks.len(), 19);
         for expected in [
             "PreToolUse",
             "PostToolUse",
@@ -1570,6 +1594,10 @@ mod tests {
             "PostCompact",
             "StopFailure",
             "PermissionDenied",
+            "PermissionRequest",
+            "Elicitation",
+            "ElicitationResult",
+            "MessageDisplay",
         ] {
             assert!(
                 hooks.contains_key(expected),
@@ -1743,7 +1771,7 @@ mod tests {
         let exe_str = "/test/bin/punkgo-jack";
         let (installed, _skipped) = install_claude_code_hooks_at_path(exe_str, &settings_path)
             .expect("install should succeed cold");
-        assert_eq!(installed, 15);
+        assert_eq!(installed, 19);
 
         assert!(
             settings_path.exists(),
@@ -1752,11 +1780,11 @@ mod tests {
         let content = std::fs::read_to_string(&settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
         let hooks = settings["hooks"].as_object().unwrap();
-        // 10 pre-v0.6.0 event names + 5 v0.6.0 Lane B additions = 15.
+        // 10 pre-v0.6.0 + 5 v0.6.0 Lane B + 4 v0.7.0 Workstream A = 19.
         assert_eq!(
             hooks.len(),
-            15,
-            "expected 15 hook event names, got {}",
+            19,
+            "expected 19 hook event names, got {}",
             hooks.len()
         );
         assert!(hooks.contains_key("PreToolUse"));
@@ -1829,7 +1857,24 @@ mod tests {
                 "hook_events missing {expected}; got {names:?}"
             );
         }
-        // Total = 10 existing + 5 new = 15.
-        assert_eq!(events.len(), 15);
+        // Total = 10 existing + 5 Lane B + 4 Workstream A = 19.
+        assert_eq!(events.len(), 19);
+    }
+
+    /// v0.7.0 Workstream A: the 4 new hooks are Claude Code only and must not
+    /// map to Cursor events.
+    #[test]
+    fn cursor_filters_out_workstream_a_events() {
+        for claude_only in [
+            "PermissionRequest",
+            "Elicitation",
+            "ElicitationResult",
+            "MessageDisplay",
+        ] {
+            assert!(
+                cursor_event_name(claude_only).is_none(),
+                "{claude_only} must not map to a Cursor event"
+            );
+        }
     }
 }
