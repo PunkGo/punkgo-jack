@@ -4,6 +4,24 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
+## [Unreleased]
+
+### Removed
+
+- **`roast` command and all personality-diagnosis code.** The built-in
+  `punkgo-jack roast` feature (16 dog-breed personality cards, SVG/PNG card
+  rendering, meme radar) is gone. jack now focuses solely on cryptographic
+  receipts and transcript recording. The hosted quiz continues at
+  [roast.punkgo.ai](https://roast.punkgo.ai).
+  - **Dropped dependencies:** `resvg`, `usvg`, `tiny-skia` — and the
+    `roast-png` cargo feature, which was the **default**. `default` is now empty,
+    shrinking the binary and the dependency tree.
+  - **Deleted code:** `src/roast/` (analysis, config, render, embedded assets)
+    and the now-unused `data_fetch` helpers `fetch_checkpoint`, `event_type`,
+    `event_target`.
+  - **Deleted assets:** `assets/dogs/` (16 PNGs), `assets/roast-hero.png`,
+    `assets/roast-grid-16.png`, and local roast design artifacts under `design/`.
+
 ## [0.6.2] - 2026-04-16
 
 ### Fixed

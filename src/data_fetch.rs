@@ -162,38 +162,6 @@ pub fn format_timestamp_time(ms: u64) -> String {
         .unwrap_or_else(|| "??:??:??".into())
 }
 
-/// Fetch latest checkpoint from kernel (best-effort).
-pub fn fetch_checkpoint(client: &IpcClient) -> Result<Value> {
-    let req = RequestEnvelope {
-        request_id: new_request_id(),
-        request_type: RequestType::Read,
-        payload: json!({ "kind": "checkpoint" }),
-    };
-    let resp = client.send(&req)?;
-    if resp.status != "ok" {
-        bail!("checkpoint query failed");
-    }
-    Ok(resp.payload)
-}
-
-/// Extract the event_type string from an event Value.
-pub fn event_type(event: &Value) -> &str {
-    event
-        .get("payload")
-        .and_then(|p| p.get("event_type"))
-        .and_then(Value::as_str)
-        .or_else(|| event.get("action_type").and_then(Value::as_str))
-        .unwrap_or("unknown")
-}
-
-/// Extract the target string from an event Value.
-pub fn event_target(event: &Value) -> &str {
-    event
-        .get("target")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -202,24 +170,6 @@ pub fn event_target(event: &Value) -> &str {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn event_type_extracts_from_payload() {
-        let e = json!({"payload": {"event_type": "file_read"}});
-        assert_eq!(event_type(&e), "file_read");
-    }
-
-    #[test]
-    fn event_type_falls_back_to_action_type() {
-        let e = json!({"action_type": "observe"});
-        assert_eq!(event_type(&e), "observe");
-    }
-
-    #[test]
-    fn event_type_returns_unknown_for_empty() {
-        let e = json!({});
-        assert_eq!(event_type(&e), "unknown");
-    }
 
     #[test]
     fn parse_timestamp_prefers_client_timestamp() {
@@ -232,11 +182,5 @@ mod tests {
         let e = json!({"payload": {"metadata": {"session_id": "abc-123-def"}}});
         assert!(event_matches_session(&e, "abc-123"));
         assert!(!event_matches_session(&e, "xyz"));
-    }
-
-    #[test]
-    fn event_target_extracts() {
-        let e = json!({"target": "hook/file:src/main.rs"});
-        assert_eq!(event_target(&e), "hook/file:src/main.rs");
     }
 }

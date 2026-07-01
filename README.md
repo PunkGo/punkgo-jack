@@ -17,7 +17,7 @@ curl -fsSL https://raw.githubusercontent.com/PunkGo/punkgo-jack/main/install.sh 
 
 ---
 
-**Contents:** [Quick Start](#quick-start) · [Why receipts?](#why-receipts) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Evolution](#evolution) · [Roast](#punkgo-roast)
+**Contents:** [Quick Start](#quick-start) · [Why receipts?](#why-receipts) · [How It Works](#how-it-works) · [Verify](#verify) · [Trust Layers](#trust-layers) · [CLI](#cli) · [Config](#config) · [Supported Tools](#supported-tools) · [Evolution](#evolution)
 
 ---
 
@@ -106,7 +106,6 @@ A root operator with the signing key could rebuild the tree — this is the sing
 | `export` | Export events as markdown or JSON |
 | `serve` | MCP server (13 tools for agent self-query) |
 | `reindex` | Backfill transcript index (`--full`, `--since`, `--session`, `--dry-run`) |
-| `roast` | AI personality diagnosis from local data (`roast help`) |
 | `upgrade` | Self-update (no re-setup needed) |
 
 ## Config
