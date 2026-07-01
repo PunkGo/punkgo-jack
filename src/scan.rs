@@ -98,21 +98,65 @@ pub struct NormalizedTurn {
     pub blocks: Vec<NormalizedBlock>,
 }
 
-/// A source that parses its on-disk format into normalized turns. File
+/// Source-neutral session identity + provenance, parsed from a source file.
+#[derive(Debug, Clone, Default)]
+pub struct NormalizedSession {
+    pub source: String,
+    pub session_id: String,
+    pub started_at: String,
+    pub cwd: Option<String>,
+    pub git_branch: Option<String>,
+    pub git_commit: Option<String>,
+    /// Producing tool version string (e.g. `codex 0.142.5`).
+    pub tool_version: Option<String>,
+    pub model_initial: Option<String>,
+}
+
+/// The result of scanning one source file: its session plus ordered turns.
+#[derive(Debug, Clone, Default)]
+pub struct ScanResult {
+    pub session: NormalizedSession,
+    pub turns: Vec<NormalizedTurn>,
+}
+
+/// A source that parses its on-disk format into a [`ScanResult`]. File
 /// discovery and offset bookkeeping stay per-source (AD2); this is the
-/// "feed" side of the shared contract.
-///
-/// Implemented by `CodexScanner` in P2b-3; the CC path currently feeds the
-/// write core directly via `indexer::normalized_turn_from_cc_record`. The
-/// `allow(dead_code)` is removed once the first impl lands.
-#[allow(dead_code)]
+/// "feed" side of the shared contract. The Claude Code path predates this
+/// trait and feeds the write core directly via
+/// `indexer::normalized_turn_from_cc_record`; Codex implements the trait.
 pub trait SourceScanner {
     /// Source name written to `turns.source` / `sessions.source`.
     fn source(&self) -> &str;
     /// Capture policy for this source's block bodies.
     fn capture_policy(&self) -> CapturePolicy;
-    /// Parse one on-disk file into its normalized turns (in file order).
-    fn scan_file(&self, path: &std::path::Path) -> Result<Vec<NormalizedTurn>>;
+    /// Parse one on-disk file into its session + normalized turns (file order).
+    fn scan_file(&self, path: &std::path::Path) -> Result<ScanResult>;
+}
+
+/// Upsert a session row from a [`NormalizedSession`]. Shared across sources.
+/// PRIVACY: identity + provenance metadata only.
+pub fn write_session(
+    conn: &Connection,
+    session: &NormalizedSession,
+    transcript_path: Option<&str>,
+) -> Result<()> {
+    use crate::index::sessions::{self, SessionRow};
+    let now = now_iso();
+    let row = SessionRow {
+        session_id: session.session_id.clone(),
+        source: session.source.clone(),
+        started_at: session.started_at.clone(),
+        transcript_path: transcript_path.map(String::from),
+        cwd_initial: session.cwd.clone(),
+        git_branch_initial: session.git_branch.clone(),
+        git_commit_initial: session.git_commit.clone(),
+        tool_version: session.tool_version.clone(),
+        model_initial: session.model_initial.clone(),
+        created_at: now.clone(),
+        updated_at: now,
+        ..Default::default()
+    };
+    sessions::upsert_session(conn, &row)
 }
 
 // ---------------------------------------------------------------------------

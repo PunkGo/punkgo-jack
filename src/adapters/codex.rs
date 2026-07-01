@@ -660,6 +660,397 @@ fn fold_response_item(
 }
 
 // ---------------------------------------------------------------------------
+// CodexScanner — rollout -> normalized turns (AD1 "feed" side)
+// ---------------------------------------------------------------------------
+
+use crate::redact::Redactor;
+use crate::scan::{
+    CapturePolicy, NormalizedBlock, NormalizedSession, NormalizedTurn, ScanResult, SourceScanner,
+};
+
+/// Parses Codex rollout files into the source-neutral [`ScanResult`]. Captures
+/// full I/O (`CapturePolicy::Full`); every body is passed through a
+/// [`Redactor`] before it leaves this module (AD6).
+///
+/// `Default` builds a redactor from the current environment
+/// (`Redactor::default` == `Redactor::from_env`).
+#[derive(Default)]
+pub struct CodexScanner {
+    redactor: Redactor,
+}
+
+impl CodexScanner {
+    /// Build a scanner with an explicit redactor (tests).
+    #[cfg(test)]
+    pub fn with_redactor(redactor: Redactor) -> Self {
+        Self { redactor }
+    }
+}
+
+impl SourceScanner for CodexScanner {
+    fn source(&self) -> &str {
+        "codex"
+    }
+
+    fn capture_policy(&self) -> CapturePolicy {
+        CapturePolicy::Full
+    }
+
+    fn scan_file(&self, path: &Path) -> Result<ScanResult> {
+        scan_rollout(path, &self.redactor)
+    }
+}
+
+/// Render a `function_call_output`-style value as text: strings pass through,
+/// everything else is JSON-encoded (Codex outputs are usually strings but are
+/// occasionally arrays — verified in P2a).
+fn value_to_text(v: &Value) -> String {
+    match v.as_str() {
+        Some(s) => s.to_string(),
+        None if v.is_null() => String::new(),
+        None => serde_json::to_string(v).unwrap_or_default(),
+    }
+}
+
+/// Turn accumulator: groups the assistant's work (reasoning, tool calls/
+/// outputs, assistant messages) that falls between two user/developer
+/// messages into a single assistant turn (AD3 turn granularity).
+struct RolloutGrouper<'a> {
+    redactor: &'a Redactor,
+    session_id: String,
+    turns: Vec<NormalizedTurn>,
+    pending_assistant: Vec<NormalizedBlock>,
+    turn_index: usize,
+    current_model: Option<String>,
+    current_cwd: Option<String>,
+    git_branch: Option<String>,
+}
+
+impl<'a> RolloutGrouper<'a> {
+    fn new(redactor: &'a Redactor, session_id: String) -> Self {
+        Self {
+            redactor,
+            session_id,
+            turns: Vec::new(),
+            pending_assistant: Vec::new(),
+            turn_index: 0,
+            current_model: None,
+            current_cwd: None,
+            git_branch: None,
+        }
+    }
+
+    fn capture(&self, text: &str) -> Option<String> {
+        if text.is_empty() {
+            return None;
+        }
+        Some(self.redactor.redact(text).0)
+    }
+
+    /// Emit a turn with the given role + blocks. `byte_len` on each block is
+    /// the length of the (redacted) stored body, or a size signal for opaque
+    /// blocks. Skips empty turns.
+    fn emit(&mut self, role: &str, blocks: Vec<NormalizedBlock>) {
+        if blocks.is_empty() {
+            return;
+        }
+        let idx = self.turn_index;
+        self.turn_index += 1;
+        self.turns.push(NormalizedTurn {
+            source: "codex".to_string(),
+            turn_uuid: format!("{}:t{idx}", self.session_id),
+            session_id: self.session_id.clone(),
+            parent_turn_uuid: None,
+            role: role.to_string(),
+            timestamp: String::new(), // stamped by caller per-line if desired
+            cwd: self.current_cwd.clone(),
+            git_branch: self.git_branch.clone(),
+            is_sidechain: false,
+            slug: None,
+            tool_version: None,
+            request_id: None,
+            message_id: None,
+            model: self.current_model.clone(),
+            model_variant: None,
+            usage: None,
+            blocks,
+        });
+    }
+
+    /// Flush any pending assistant work as an assistant turn.
+    fn flush_assistant(&mut self) {
+        if !self.pending_assistant.is_empty() {
+            let blocks = std::mem::take(&mut self.pending_assistant);
+            self.emit("assistant", blocks);
+        }
+    }
+
+    /// Build the blocks for a message (one block per content part).
+    fn message_blocks(&self, m: &CodexMessage) -> Vec<NormalizedBlock> {
+        m.content
+            .iter()
+            .filter_map(|part| match part {
+                MessageContent::InputText { text } => Some(NormalizedBlock {
+                    kind: "input_text".to_string(),
+                    role: Some(m.role.clone()),
+                    byte_len: text.len(),
+                    content: self.capture(text),
+                    ..Default::default()
+                }),
+                MessageContent::OutputText { text } => Some(NormalizedBlock {
+                    kind: "output_text".to_string(),
+                    role: Some(m.role.clone()),
+                    byte_len: text.len(),
+                    content: self.capture(text),
+                    ..Default::default()
+                }),
+                // Inline images (data: URLs) are large and low-value to store;
+                // record presence + size, never blob the base64.
+                MessageContent::InputImage { image_url } => Some(NormalizedBlock {
+                    kind: "image".to_string(),
+                    role: Some(m.role.clone()),
+                    byte_len: image_url.as_deref().map(|u| u.len()).unwrap_or(0),
+                    content: None,
+                    ..Default::default()
+                }),
+                MessageContent::Unknown => None,
+            })
+            .collect()
+    }
+
+    /// Route one response item into the current turn grouping.
+    fn push_item(&mut self, item: ResponseItem) {
+        match item {
+            ResponseItem::Message(m) => match m.role.as_str() {
+                "user" => {
+                    self.flush_assistant();
+                    let blocks = self.message_blocks(&m);
+                    self.emit("user", blocks);
+                }
+                "developer" => {
+                    self.flush_assistant();
+                    let blocks = self.message_blocks(&m);
+                    self.emit("developer", blocks);
+                }
+                // assistant (or any other) message is part of the assistant's
+                // in-flight response.
+                _ => {
+                    let mut blocks = self.message_blocks(&m);
+                    self.pending_assistant.append(&mut blocks);
+                }
+            },
+            ResponseItem::Reasoning(r) => {
+                // Opaque: never store the (encrypted) body; record its size.
+                let byte_len = r.encrypted_content.as_deref().map(|s| s.len()).unwrap_or(0);
+                self.pending_assistant.push(NormalizedBlock {
+                    kind: "reasoning".to_string(),
+                    role: Some("assistant".to_string()),
+                    signature_present: true,
+                    byte_len,
+                    content: None,
+                    ..Default::default()
+                });
+            }
+            ResponseItem::FunctionCall(fc) => {
+                self.pending_assistant.push(NormalizedBlock {
+                    kind: "tool_call".to_string(),
+                    role: Some("assistant".to_string()),
+                    tool_name: Some(fc.name),
+                    byte_len: fc.arguments.len(),
+                    content: self.capture(&fc.arguments),
+                    ..Default::default()
+                });
+            }
+            ResponseItem::CustomToolCall(c) => {
+                self.pending_assistant.push(NormalizedBlock {
+                    kind: "tool_call".to_string(),
+                    role: Some("assistant".to_string()),
+                    tool_name: Some(c.name),
+                    byte_len: c.input.len(),
+                    content: self.capture(&c.input),
+                    ..Default::default()
+                });
+            }
+            ResponseItem::FunctionCallOutput(o) => {
+                let text = value_to_text(&o.output);
+                self.pending_assistant.push(NormalizedBlock {
+                    kind: "tool_result".to_string(),
+                    role: Some("tool".to_string()),
+                    byte_len: text.len(),
+                    content: self.capture(&text),
+                    ..Default::default()
+                });
+            }
+            ResponseItem::CustomToolCallOutput(o) => {
+                let text = value_to_text(&o.output);
+                self.pending_assistant.push(NormalizedBlock {
+                    kind: "tool_result".to_string(),
+                    role: Some("tool".to_string()),
+                    byte_len: text.len(),
+                    content: self.capture(&text),
+                    ..Default::default()
+                });
+            }
+            ResponseItem::WebSearchCall(w) => {
+                let text = value_to_text(&w.action);
+                self.pending_assistant.push(NormalizedBlock {
+                    kind: "tool_call".to_string(),
+                    role: Some("assistant".to_string()),
+                    tool_name: Some("web_search".to_string()),
+                    byte_len: text.len(),
+                    content: self.capture(&text),
+                    ..Default::default()
+                });
+            }
+            ResponseItem::ToolSearchCall(_) => self.pending_assistant.push(NormalizedBlock {
+                kind: "tool_call".to_string(),
+                role: Some("assistant".to_string()),
+                tool_name: Some("tool_search".to_string()),
+                ..Default::default()
+            }),
+            ResponseItem::ToolSearchOutput(_) => self.pending_assistant.push(NormalizedBlock {
+                kind: "tool_result".to_string(),
+                role: Some("tool".to_string()),
+                ..Default::default()
+            }),
+            ResponseItem::ImageGenerationCall(_) => self.pending_assistant.push(NormalizedBlock {
+                kind: "image".to_string(),
+                role: Some("assistant".to_string()),
+                tool_name: Some("image_generation".to_string()),
+                ..Default::default()
+            }),
+            // ghost_snapshot: a git-internal marker, not conversational content.
+            ResponseItem::GhostSnapshot(_) | ResponseItem::Unknown => {}
+        }
+    }
+}
+
+/// Parse one rollout file into a [`ScanResult`]: session identity + ordered
+/// turns with captured (redacted) content. Streams line-by-line and is
+/// non-UTF-8 tolerant, matching the dry-run scanner.
+pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+
+    let mut session = NormalizedSession {
+        source: "codex".to_string(),
+        // Fallback session id from the filename until session_meta is seen.
+        session_id: session_id_from_path(path),
+        ..Default::default()
+    };
+    let mut session_meta_seen = false;
+    let mut first_timestamp: Option<String> = None;
+
+    // Grouper needs the session id up front; if session_meta arrives later and
+    // changes it (it is normally the first line), we adopt it before any turn
+    // is emitted. In practice session_meta is line 1 for every observed file.
+    let mut grouper = RolloutGrouper::new(redactor, session.session_id.clone());
+
+    let mut line_bytes: Vec<u8> = Vec::new();
+    loop {
+        line_bytes.clear();
+        match reader.read_until(b'\n', &mut line_bytes) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "I/O error, stopping file early");
+                break;
+            }
+        }
+        let line_cow = String::from_utf8_lossy(&line_bytes);
+        let line = line_cow.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let envelope: RolloutLine = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => continue, // skip unparseable line, never abort
+        };
+        if first_timestamp.is_none() {
+            first_timestamp = envelope.timestamp.clone();
+        }
+
+        match envelope.kind.as_str() {
+            "session_meta" => {
+                if let Ok(meta) = serde_json::from_value::<SessionMeta>(envelope.payload) {
+                    if !session_meta_seen {
+                        session.session_id = meta.id.clone();
+                        grouper.session_id = meta.id.clone();
+                        session_meta_seen = true;
+                    }
+                    session.started_at = meta.timestamp.clone().unwrap_or_default();
+                    session.cwd = meta.cwd.clone();
+                    grouper.current_cwd = meta.cwd.clone();
+                    session.tool_version = meta.cli_version.map(|v| format!("codex {v}"));
+                    if let Some(git) = meta.git {
+                        session.git_branch = git.branch.clone();
+                        session.git_commit = git.commit_hash;
+                        grouper.git_branch = git.branch;
+                    }
+                }
+            }
+            "turn_context" => {
+                if let Ok(tc) = serde_json::from_value::<TurnContext>(envelope.payload) {
+                    if tc.model.is_some() {
+                        grouper.current_model = tc.model.clone();
+                        if session.model_initial.is_none() {
+                            session.model_initial = tc.model;
+                        }
+                    }
+                    if tc.cwd.is_some() {
+                        grouper.current_cwd = tc.cwd;
+                    }
+                }
+            }
+            "response_item" => {
+                if let Ok(item) = serde_json::from_value::<ResponseItem>(envelope.payload) {
+                    grouper.push_item(item);
+                }
+            }
+            _ => {} // event_msg / compacted: not authoritative content (AD5)
+        }
+    }
+
+    // Close the final assistant turn.
+    grouper.flush_assistant();
+
+    if session.started_at.is_empty() {
+        session.started_at = first_timestamp.unwrap_or_else(now_iso_fallback);
+    }
+
+    let turns = grouper.turns;
+    Ok(ScanResult { session, turns })
+}
+
+/// Derive a session id from a rollout filename
+/// (`rollout-<ts>-<uuid>.jsonl` -> `<uuid>`), falling back to the stem.
+fn session_id_from_path(path: &Path) -> String {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex-session");
+    // rollout-2026-01-01T00-00-00-<uuid>: the uuid is the last 5 dash groups.
+    // Simplest stable derivation: take everything after the timestamp prefix,
+    // else the whole stem.
+    stem.strip_prefix("rollout-")
+        .map(|rest| {
+            // rest = "<ts>-<uuid>"; the uuid (8-4-4-4-12) is the last 5 groups.
+            let parts: Vec<&str> = rest.rsplitn(6, '-').collect();
+            if parts.len() == 6 {
+                // parts is reversed; the last 5 groups form the uuid.
+                format!(
+                    "{}-{}-{}-{}-{}",
+                    parts[4], parts[3], parts[2], parts[1], parts[0]
+                )
+            } else {
+                rest.to_string()
+            }
+        })
+        .unwrap_or_else(|| stem.to_string())
+}
+
+fn now_iso_fallback() -> String {
+    crate::index::now_iso()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -879,5 +1270,75 @@ mod tests {
         let report = dry_run_scan(Path::new("/nonexistent/codex/sessions")).unwrap();
         assert_eq!(report.files_scanned, 0);
         assert_eq!(report.hard_parse_errors, 0);
+    }
+
+    /// End-to-end scanner: a synthetic rollout groups into user + assistant
+    /// turns, captures block content, marks reasoning opaque, and redacts
+    /// secrets (AD6) before content leaves the module.
+    #[test]
+    fn codex_scanner_groups_turns_and_redacts() {
+        use crate::redact::Redactor;
+        use crate::scan::SourceScanner;
+        use std::io::Write;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("rollout-2026-01-01T00-00-00-uuid.jsonl");
+        let lines = [
+            json!({"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"sess-abc","timestamp":"2026-01-01T00:00:00Z","cwd":"/w","cli_version":"0.142.5","git":{"branch":"main","commit_hash":"deadbeef"}}}),
+            json!({"timestamp":"t","type":"turn_context","payload":{"model":"gpt-5.2-codex","effort":"high"}}),
+            json!({"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"do it"}]}}),
+            json!({"timestamp":"t","type":"response_item","payload":{"type":"reasoning","encrypted_content":"ENCRYPTEDBLOB","summary":[]}}),
+            json!({"timestamp":"t","type":"response_item","payload":{"type":"function_call","call_id":"call_1","name":"shell","arguments":"echo API_KEY=supersecretvalue123"}}),
+            json!({"timestamp":"t","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"ok done"}}),
+            json!({"timestamp":"t","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"finished"}]}}),
+            json!({"timestamp":"t","type":"event_msg","payload":{"type":"token_count"}}),
+        ];
+        let mut f = std::fs::File::create(&path).unwrap();
+        for l in &lines {
+            writeln!(f, "{l}").unwrap();
+        }
+        f.flush().unwrap();
+
+        let scanner =
+            CodexScanner::with_redactor(Redactor::with_env_values(vec!["supersecretvalue123".into()]));
+        let result = scanner.scan_file(&path).unwrap();
+
+        // Session metadata.
+        assert_eq!(result.session.session_id, "sess-abc");
+        assert_eq!(result.session.model_initial.as_deref(), Some("gpt-5.2-codex"));
+        assert_eq!(result.session.git_branch.as_deref(), Some("main"));
+        assert_eq!(result.session.source, "codex");
+
+        // Two turns: user prompt, then the assistant's aggregated work.
+        assert_eq!(result.turns.len(), 2);
+        let user = &result.turns[0];
+        assert_eq!(user.role, "user");
+        assert_eq!(user.turn_uuid, "sess-abc:t0");
+        assert_eq!(user.blocks.len(), 1);
+        assert_eq!(user.blocks[0].content.as_deref(), Some("do it"));
+
+        let asst = &result.turns[1];
+        assert_eq!(asst.role, "assistant");
+        assert_eq!(asst.turn_uuid, "sess-abc:t1");
+        assert_eq!(asst.model.as_deref(), Some("gpt-5.2-codex"));
+        // reasoning + tool_call + tool_result + output_text.
+        let kinds: Vec<&str> = asst.blocks.iter().map(|b| b.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["reasoning", "tool_call", "tool_result", "output_text"]);
+
+        // Reasoning is opaque: no content, size recorded, signature flag set.
+        let reasoning = &asst.blocks[0];
+        assert!(reasoning.content.is_none());
+        assert!(reasoning.signature_present);
+        assert_eq!(reasoning.byte_len, "ENCRYPTEDBLOB".len());
+
+        // AD6: the secret is redacted in the captured tool-call content.
+        let tool_call = &asst.blocks[1];
+        assert_eq!(tool_call.tool_name.as_deref(), Some("shell"));
+        let captured = tool_call.content.as_deref().unwrap();
+        assert!(!captured.contains("supersecretvalue123"), "secret leaked: {captured}");
+        assert!(captured.contains("REDACTED"), "expected redaction marker: {captured}");
+
+        assert_eq!(asst.blocks[2].content.as_deref(), Some("ok done"));
+        assert_eq!(asst.blocks[3].content.as_deref(), Some("finished"));
     }
 }

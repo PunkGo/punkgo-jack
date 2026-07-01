@@ -663,6 +663,132 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
 }
 
 // ---------------------------------------------------------------------------
+// Codex full reindex (AD2 source routing — write path)
+// ---------------------------------------------------------------------------
+
+/// Backfill jack.db from the Codex rollout tree (`$CODEX_HOME/sessions`).
+///
+/// AD2: this is the Codex arm of source routing — a per-source root, one
+/// rollout file per session (no subagent merging), and content capture under
+/// `CapturePolicy::Full` (bodies to the blob store, redacted; per-block
+/// `turn_content` rows; AD3/AD6). Each file is written in its own transaction
+/// so one bad file cannot corrupt accumulated progress. Idempotent: a session
+/// is fully deleted (content → turns → signatures) before re-insert.
+pub fn run_codex_reindex() -> Result<ReindexReport> {
+    use crate::adapters::codex::{self, CodexScanner};
+    use crate::scan::{write_normalized_turn, write_session, SourceScanner};
+
+    let started = Instant::now();
+    let mut report = ReindexReport::default();
+
+    let root = codex::codex_sessions_root()?;
+    if !root.exists() {
+        warn!(path = %root.display(), "codex sessions dir does not exist; nothing to reindex");
+        report.duration_seconds = started.elapsed().as_secs_f64();
+        return Ok(report);
+    }
+
+    let files = codex::walk_rollouts(&root);
+    let total = files.len();
+    info!(file_count = total, "codex reindex starting");
+
+    let scanner = CodexScanner::default();
+    let policy = scanner.capture_policy();
+    let source = scanner.source().to_string();
+    let mut conn = index::open_jack_db()?;
+
+    for (i, path) in files.iter().enumerate() {
+        let scan_result = match scanner.scan_file(path) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "codex scan_file failed");
+                report.files_failed += 1;
+                continue;
+            }
+        };
+
+        if scan_result.turns.is_empty() {
+            report.files_scanned += 1;
+            continue;
+        }
+
+        let session_id = scan_result.session.session_id.clone();
+        let file_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+        let tx_result: Result<usize> = (|| {
+            let tx = conn.transaction()?;
+            let sid = &session_id;
+
+            // Idempotent re-scan: content before turns (join dependency),
+            // then signatures.
+            turn_content::delete_content_for_session(&tx, sid)?;
+            turns::delete_turns_for_session(&tx, sid)?;
+            sig_idx::delete_signatures_for_session(&tx, sid)?;
+
+            write_session(&tx, &scan_result.session, Some(path.to_string_lossy().as_ref()))?;
+
+            let mut written = 0usize;
+            for (order, turn) in scan_result.turns.iter().enumerate() {
+                if write_normalized_turn(&tx, turn, order as i64, policy, None)? {
+                    written += 1;
+                }
+            }
+
+            let agg = compute_aggregates_from_db(&tx, sid)?;
+            sessions::finalize_session(&tx, sid, &agg)?;
+            sessions::update_scan_offset(&tx, sid, file_len, None)?;
+
+            tx.commit()?;
+            Ok(written)
+        })();
+
+        match tx_result {
+            Ok(written) => {
+                report.turns_upserted += written;
+                report.sessions_upserted += 1;
+                report.files_scanned += 1;
+            }
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "codex reindex transaction failed");
+                report.files_failed += 1;
+            }
+        }
+
+        if (i + 1) % 50 == 0 {
+            info!(progress = format!("{}/{}", i + 1, total), "codex reindex progress");
+        }
+    }
+
+    report.duration_seconds = started.elapsed().as_secs_f64();
+
+    // Reconcile counts against the DB for this source (exact, like Path B).
+    report.turns_upserted = conn
+        .query_row(
+            "SELECT COUNT(*) FROM turns WHERE source = ?1",
+            params![source],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize;
+    report.sessions_upserted = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sessions WHERE source = ?1",
+            params![source],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize;
+
+    info!(
+        files = report.files_scanned,
+        failed = report.files_failed,
+        turns = report.turns_upserted,
+        sessions = report.sessions_upserted,
+        duration_s = report.duration_seconds,
+        "codex reindex complete"
+    );
+    Ok(report)
+}
+
+// ---------------------------------------------------------------------------
 // Path C — startup reconciliation
 // ---------------------------------------------------------------------------
 
@@ -1589,6 +1715,98 @@ mod tests {
             byte_len >= 10 * 1024,
             "byte_len should reflect the full secret text, got {byte_len}"
         );
+    }
+
+    /// End-to-end Codex write path: run_codex_reindex materializes sessions +
+    /// turns + turn_content from a synthetic rollout, is idempotent across
+    /// re-runs (turn_content does not grow — the P2b-2 eng-review fix), and
+    /// tags source="codex".
+    #[test]
+    fn codex_reindex_writes_content_and_is_idempotent() {
+        let _guard = DataDirGuard::new(); // locks + points PUNKGO_DATA_DIR at a tempdir
+
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let day = codex_home
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("01")
+            .join("01");
+        std::fs::create_dir_all(&day).unwrap();
+        let rollout = day.join("rollout-2026-01-01T00-00-00-uuid.jsonl");
+
+        let lines = [
+            serde_json::json!({"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"sess-codex","timestamp":"2026-01-01T00:00:00Z","cwd":"/w","cli_version":"0.142.5","git":{"branch":"main"}}}),
+            serde_json::json!({"timestamp":"t","type":"turn_context","payload":{"model":"gpt-5.2-codex"}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"do it"}]}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"reasoning","encrypted_content":"ENC"}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell","arguments":"ls"}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}),
+        ];
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&rollout).unwrap();
+            for l in &lines {
+                writeln!(f, "{l}").unwrap();
+            }
+            f.flush().unwrap();
+        }
+
+        let prev_codex = std::env::var_os("CODEX_HOME");
+        std::env::set_var("CODEX_HOME", codex_home.path());
+
+        let r1 = run_codex_reindex().unwrap();
+        let r2 = run_codex_reindex().unwrap();
+
+        if let Some(v) = prev_codex {
+            std::env::set_var("CODEX_HOME", v);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+
+        // 1 session; 2 turns (user prompt + aggregated assistant work).
+        assert_eq!(r1.sessions_upserted, 1);
+        assert_eq!(r1.turns_upserted, 2);
+        // Idempotent across re-runs.
+        assert_eq!(r1.turns_upserted, r2.turns_upserted);
+        assert_eq!(r1.sessions_upserted, r2.sessions_upserted);
+
+        let conn = index::open_jack_db().unwrap();
+        // Full capture wrote per-block turn_content: user(1: input_text) +
+        // assistant(4: reasoning, tool_call, tool_result, output_text) = 5.
+        let tc: i64 = conn
+            .query_row("SELECT COUNT(*) FROM turn_content", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tc, 5, "turn_content must not grow across re-runs (idempotent)");
+
+        // Source tagged; content_blob_hash set on the assistant turn.
+        let codex_turns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM turns WHERE source = 'codex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(codex_turns, 2);
+        let hashed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM turns WHERE content_blob_hash IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(hashed >= 1, "captured turns carry a content_blob_hash");
+
+        // A captured body is retrievable from the blob store by its hash.
+        let hash: String = conn
+            .query_row(
+                "SELECT content_hash FROM turn_content WHERE content_hash IS NOT NULL LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(crate::blob::resolve(&hash).unwrap().is_some());
     }
 
     #[test]

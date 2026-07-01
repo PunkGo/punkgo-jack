@@ -15,6 +15,7 @@ mod ingest;
 mod ipc_client;
 mod mcp;
 mod presence;
+mod redact;
 mod report;
 mod scan;
 mod session;
@@ -250,18 +251,24 @@ fn run_reindex(args: &mut impl Iterator<Item = String>) -> Result<()> {
 /// distribution, call_id linkage, turn granularity) without writing to
 /// jack.db. The real ingest/write path is P2b.
 fn run_reindex_codex(opts: &indexer::ReindexOptions) -> Result<()> {
-    if !opts.dry_run {
-        anyhow::bail!(
-            "reindex --source codex currently supports --dry-run only \
-             (the Codex write path lands in v0.7.0 P2b). \
-             Run: punkgo-jack reindex --source codex --dry-run"
-        );
+    // Dry-run: the validation-only parse report (P2a). Writes nothing.
+    if opts.dry_run {
+        let root = adapters::codex::codex_sessions_root()?;
+        println!("codex reindex (dry-run) scanning: {}", root.display());
+        let report = adapters::codex::dry_run_scan(&root)?;
+        print_codex_dry_run_report(&report);
+        return Ok(());
     }
 
-    let root = adapters::codex::codex_sessions_root()?;
-    println!("codex reindex (dry-run) scanning: {}", root.display());
-    let report = adapters::codex::dry_run_scan(&root)?;
-    print_codex_dry_run_report(&report);
+    // Write path (P2b-3): backfill jack.db from the rollout tree with full
+    // content capture (redacted) into the blob store + turn_content.
+    let report = indexer::run_codex_reindex()?;
+    println!("codex reindex complete:");
+    println!("  files scanned    : {}", report.files_scanned);
+    println!("  files failed     : {}", report.files_failed);
+    println!("  sessions upserted: {}", report.sessions_upserted);
+    println!("  turns upserted   : {}", report.turns_upserted);
+    println!("  duration         : {:.1}s", report.duration_seconds);
     Ok(())
 }
 
