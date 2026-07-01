@@ -136,7 +136,8 @@ pub fn run_setup(tool: &str) -> Result<()> {
     match tool {
         "claude-code" => setup_claude_code()?,
         "cursor" => setup_cursor()?,
-        other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor"),
+        "codex" => setup_codex()?,
+        other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor, codex"),
     }
 
     // Signal collection — help us understand who uses PunkGo and why.
@@ -387,6 +388,184 @@ fn setup_cursor() -> Result<()> {
     // Seed the actor.
     try_seed_actor("cursor");
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Codex setup (writes ~/.codex/hooks.json)
+// ---------------------------------------------------------------------------
+
+/// Codex hook events (AD5): hooks only TRIGGER a rollout rescan, they never
+/// submit an event themselves. `SessionStart` catches up on resume; `Stop`
+/// captures each completed turn. Returns (event, optional matcher regex).
+fn codex_hook_events() -> Vec<(&'static str, Option<&'static str>)> {
+    vec![("SessionStart", Some("startup|resume")), ("Stop", None)]
+}
+
+/// Merge a punkgo command into a Codex hooks.json event array. The schema
+/// (verified against developers.openai.com/codex/hooks) is:
+///   "EventName": [ { "matcher"?: regex, "hooks": [ {type,command,timeout} ] } ]
+/// Idempotent: returns false if a punkgo hook is already registered.
+fn merge_codex_hook(
+    hooks: &mut Map<String, Value>,
+    event: &str,
+    matcher: Option<&str>,
+    command: &str,
+) -> bool {
+    if !hooks.contains_key(event) {
+        hooks.insert(event.into(), json!([]));
+    }
+    let entries = hooks
+        .get_mut(event)
+        .and_then(Value::as_array_mut)
+        .expect("just ensured it's an array");
+
+    let already = entries.iter().any(|group| {
+        group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter().any(|h| {
+                    h.get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_punkgo_hook)
+                })
+            })
+            .unwrap_or(false)
+    });
+    if already {
+        return false;
+    }
+
+    let mut group = json!({
+        "hooks": [ { "type": "command", "command": command, "timeout": 10 } ]
+    });
+    if let Some(m) = matcher {
+        group
+            .as_object_mut()
+            .unwrap()
+            .insert("matcher".into(), json!(m));
+    }
+    entries.push(group);
+    true
+}
+
+fn setup_codex() -> Result<()> {
+    let exe_path =
+        std::env::current_exe().context("failed to determine punkgo-jack executable path")?;
+    // Codex runs hooks via a shell; forward-slash the path for portability.
+    let exe_str = exe_path.to_string_lossy().replace('\\', "/");
+    let exe_cmd = if exe_str.contains(' ') {
+        format!("\"{exe_str}\"")
+    } else {
+        exe_str
+    };
+
+    let path = codex_hooks_path()?;
+    let mut root = if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        serde_json::from_str::<Value>(&content)
+            .with_context(|| format!("failed to parse {}", path.display()))?
+    } else {
+        json!({ "hooks": {} })
+    };
+
+    let root_obj = root
+        .as_object_mut()
+        .context("hooks.json root must be a JSON object")?;
+    root_obj.entry("hooks").or_insert_with(|| json!({}));
+    let hooks = root_obj
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .context("hooks.json 'hooks' must be a JSON object")?;
+
+    let command = format!("{exe_cmd} ingest --source codex --quiet");
+    let mut installed = 0usize;
+    let mut skipped = 0usize;
+    for (event, matcher) in codex_hook_events() {
+        if merge_codex_hook(hooks, event, matcher, &command) {
+            installed += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+
+    if installed > 0 {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let content = serde_json::to_string_pretty(&root)
+            .context("failed to serialize codex hooks.json")?;
+        std::fs::write(&path, content.as_bytes())
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        eprintln!("hooks: {installed} installed into {}", path.display());
+    } else {
+        eprintln!("hooks: already installed ({skipped} skipped)");
+    }
+
+    detect_and_save_kerneld();
+    try_seed_actor("codex");
+    Ok(())
+}
+
+fn unsetup_codex(purge: bool) -> Result<()> {
+    let path = codex_hooks_path()?;
+    if !path.exists() {
+        debug!(path = %path.display(), "no codex hooks.json found, nothing to remove");
+        if purge {
+            purge_jack_state()?;
+        }
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let mut root: Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+
+    if let Some(hooks) = root
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("hooks"))
+        .and_then(Value::as_object_mut)
+    {
+        let event_keys: Vec<String> = hooks.keys().cloned().collect();
+        for key in &event_keys {
+            let Some(entries) = hooks.get_mut(key).and_then(Value::as_array_mut) else {
+                continue;
+            };
+            entries.retain(|group| {
+                !group
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter().any(|h| {
+                            h.get("command")
+                                .and_then(Value::as_str)
+                                .is_some_and(is_punkgo_hook)
+                        })
+                    })
+                    .unwrap_or(false)
+            });
+        }
+        let empty: Vec<String> = hooks
+            .iter()
+            .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &empty {
+            hooks.remove(key);
+        }
+    }
+
+    let content = serde_json::to_string_pretty(&root).context("failed to serialize hooks.json")?;
+    std::fs::write(&path, content.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    if purge {
+        purge_jack_state()?;
+    }
     Ok(())
 }
 
@@ -981,7 +1160,8 @@ pub fn run_unsetup(tool: &str, purge: bool) -> Result<()> {
     match tool {
         "claude-code" => unsetup_claude_code(purge),
         "cursor" => unsetup_cursor(purge),
-        other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor"),
+        "codex" => unsetup_codex(purge),
+        other => bail!("unsupported tool: '{other}'. Supported: claude-code, cursor, codex"),
     }
 }
 
@@ -1192,6 +1372,20 @@ fn cursor_hooks_path() -> Result<PathBuf> {
     let home = crate::session::home_dir()
         .context("cannot determine home directory. Set HOME (Unix) or USERPROFILE (Windows).")?;
     Ok(home.join(".cursor").join("hooks.json"))
+}
+
+/// `$CODEX_HOME/hooks.json`, falling back to `~/.codex/hooks.json`. A standalone
+/// hooks file is used (not inline `config.toml [hooks]`) so setup never mutates
+/// the user's existing Codex config; Codex merges both sources anyway.
+fn codex_hooks_path() -> Result<PathBuf> {
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        if !codex_home.trim().is_empty() {
+            return Ok(PathBuf::from(codex_home).join("hooks.json"));
+        }
+    }
+    let home = crate::session::home_dir()
+        .context("cannot determine home directory. Set HOME (Unix) or USERPROFILE (Windows).")?;
+    Ok(home.join(".codex").join("hooks.json"))
 }
 
 #[cfg(test)]
@@ -1410,6 +1604,84 @@ mod tests {
         );
         // Pre-existing user permissions must STILL survive the unsetup.
         assert_eq!(settings_after["permissions"]["allow"][0], "Bash");
+    }
+
+    #[test]
+    fn merge_codex_hook_shape_and_idempotency() {
+        let mut hooks = Map::new();
+        let cmd = "punkgo-jack ingest --source codex --quiet";
+
+        // SessionStart with a matcher.
+        assert!(merge_codex_hook(&mut hooks, "SessionStart", Some("startup|resume"), cmd));
+        let ss = hooks["SessionStart"].as_array().unwrap();
+        assert_eq!(ss.len(), 1);
+        assert_eq!(ss[0]["matcher"], "startup|resume");
+        let inner = ss[0]["hooks"].as_array().unwrap();
+        assert_eq!(inner[0]["type"], "command");
+        assert_eq!(inner[0]["command"], cmd);
+        assert_eq!(inner[0]["timeout"], 10);
+
+        // Stop without a matcher (no matcher key emitted).
+        assert!(merge_codex_hook(&mut hooks, "Stop", None, cmd));
+        let stop = hooks["Stop"].as_array().unwrap();
+        assert!(stop[0].get("matcher").is_none(), "Stop must omit matcher");
+
+        // Idempotent: re-merge is a no-op.
+        assert!(!merge_codex_hook(&mut hooks, "SessionStart", Some("startup|resume"), cmd));
+        assert_eq!(hooks["SessionStart"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn setup_and_unsetup_codex_round_trip() {
+        let guard = HomeGuard::new();
+        // Point CODEX_HOME at an isolated dir under the guarded HOME.
+        let codex_home = guard.home().join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let prev_codex = std::env::var_os("CODEX_HOME");
+        std::env::set_var("CODEX_HOME", &codex_home);
+        let hooks_path = codex_home.join("hooks.json");
+
+        // Pre-existing user hook must survive.
+        std::fs::write(
+            &hooks_path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": { "SessionStart": [
+                    { "matcher": "startup", "hooks": [
+                        { "type": "command", "command": "echo user" }
+                    ] }
+                ] }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Drive the real merge logic (setup_codex also does IPC seeding, so
+        // exercise the file-mutation core directly to stay hermetic).
+        let mut root: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        let hooks = root["hooks"].as_object_mut().unwrap();
+        for (event, matcher) in codex_hook_events() {
+            merge_codex_hook(hooks, event, matcher, "punkgo-jack ingest --source codex --quiet");
+        }
+        std::fs::write(&hooks_path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
+
+        // SessionStart now has user + punkgo; Stop has punkgo.
+        let after: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        assert_eq!(after["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
+        assert_eq!(after["hooks"]["Stop"].as_array().unwrap().len(), 1);
+
+        // --- real unsetup entrypoint ---
+        run_unsetup("codex", false).expect("unsetup codex");
+        let cleaned: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        // Punkgo Stop group gone (Stop key pruned); user SessionStart survives.
+        assert!(cleaned["hooks"].get("Stop").is_none(), "punkgo Stop must be removed");
+        let ss = cleaned["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(ss.len(), 1, "user SessionStart hook must survive");
+        assert_eq!(ss[0]["hooks"][0]["command"], "echo user");
+
+        if let Some(v) = prev_codex { std::env::set_var("CODEX_HOME", v); } else { std::env::remove_var("CODEX_HOME"); }
     }
 
     #[test]

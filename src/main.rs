@@ -102,6 +102,7 @@ fn print_usage() {
          Supported tools:\n\
          \x20 claude-code             Claude Code hooks\n\
          \x20 cursor                  Cursor IDE hooks\n\
+         \x20 codex                   Codex CLI hooks (rollout rescan trigger)\n\
          \n\
          Environment:\n\
          \x20 PUNKGO_DAEMON_ENDPOINT  Override daemon IPC endpoint\n"

@@ -11,6 +11,16 @@ Deferred work, most recent first.
   ("find where the agent touched auth"). New capability; scope-creep flag.
   Depends on content capture (v0.7.0 P2).
 
+## Deferred from v0.7.0 P3 (2026-07-02)
+
+- **Incremental Codex rollout scan** — `run_codex_reindex_session` (the P3 hook
+  path) re-scans the whole rollout file on every `Stop`. For a long session
+  whose file grows large, that is O(turns × filesize) over the session. Claude
+  Code uses byte-offset incremental scan (`transcript/scanner.rs`
+  scan_incremental + sessions.last_scan_offset); Codex should do the same:
+  resume from the stored offset and append only new turns. Correct today (full
+  re-scan is idempotent), just not optimal for very long sessions.
+
 ## Deferred from v0.7.0 Workstream B codex review (2026-07-02)
 
 - **Exactly-once Codex receipts (kernel-side idempotency)** — `drain_codex_receipts`

@@ -1095,7 +1095,7 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
 
 /// Derive a session id from a rollout filename
 /// (`rollout-<ts>-<uuid>.jsonl` -> `<uuid>`), falling back to the stem.
-fn session_id_from_path(path: &Path) -> String {
+pub fn session_id_from_path(path: &Path) -> String {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex-session");
     // rollout-2026-01-01T00-00-00-<uuid>: the uuid is the last 5 dash groups.
     // Simplest stable derivation: take everything after the timestamp prefix,

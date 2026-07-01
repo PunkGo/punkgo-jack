@@ -687,6 +687,19 @@ pub fn run_reindex(opts: ReindexOptions) -> Result<ReindexReport> {
 /// so one bad file cannot corrupt accumulated progress. Idempotent: a session
 /// is fully deleted (content → turns → signatures) before re-insert.
 pub fn run_codex_reindex() -> Result<ReindexReport> {
+    run_codex_reindex_inner(None)
+}
+
+/// Reindex just one Codex session's rollout file (the P3 hook path: a
+/// `SessionStart`/`Stop` hook passes its session_id and jack rescans only that
+/// file — AD5, rollout is truth). Full-file re-scan (not incremental); for very
+/// long sessions this re-reads the growing file each call. Incremental
+/// offset-based Codex scan is a future optimization (see TODOS.md).
+pub fn run_codex_reindex_session(session_id: &str) -> Result<ReindexReport> {
+    run_codex_reindex_inner(Some(session_id))
+}
+
+fn run_codex_reindex_inner(only_session: Option<&str>) -> Result<ReindexReport> {
     use crate::adapters::codex::{self, CodexScanner};
     use crate::scan::{write_normalized_turn, write_session, SourceScanner};
 
@@ -700,7 +713,13 @@ pub fn run_codex_reindex() -> Result<ReindexReport> {
         return Ok(report);
     }
 
-    let files = codex::walk_rollouts(&root);
+    let mut files = codex::walk_rollouts(&root);
+    // P3 single-session filter: keep only the rollout file(s) whose
+    // filename-derived id matches (the uuid is embedded in the filename and
+    // equals session_meta.id). Cheap pre-filter before scanning.
+    if let Some(sid) = only_session {
+        files.retain(|p| codex::session_id_from_path(p) == sid);
+    }
     let total = files.len();
     info!(file_count = total, "codex reindex starting");
 

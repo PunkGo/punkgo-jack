@@ -66,6 +66,31 @@ fn run_inner(args: &IngestArgs) -> Result<()> {
     let raw_json = read_stdin().unwrap_or_else(|_| json!({}));
     let is_cursor = raw_json.get("cursor_version").is_some();
 
+    // Codex: the rollout file is the source of truth (AD5). A Codex hook only
+    // TRIGGERS a rescan of that session's rollout — it does NOT submit its own
+    // kernel event (the rollout parse + E1 receipt outbox emit the receipts).
+    // This keeps one turn -> one kernel event no matter how often the hook
+    // fires. Bounded to the one session's file (never the full backfill, which
+    // would block the hook).
+    if args.source == "codex" {
+        match raw_json
+            .get("session_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            Some(sid) => {
+                if let Err(e) = crate::indexer::run_codex_reindex_session(sid) {
+                    debug!(error = %e, session = sid, "codex hook rescan failed (non-fatal)");
+                }
+            }
+            None => debug!("codex hook without session_id; skipping rescan"),
+        }
+        if !args.quiet {
+            println!("{}", json!({ "ok": true }));
+        }
+        return Ok(());
+    }
+
     // 2. Select adapter.
     let adapter = adapters::adapter_for_source(&args.source).with_context(|| {
         format!(
