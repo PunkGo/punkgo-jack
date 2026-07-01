@@ -11,7 +11,17 @@
 //! No table in this database stores raw prompt / response / thinking body
 //! text. Only metadata (uuids, timestamps, byte lengths, hashes, model
 //! identifiers, usage tokens, opaque thinking signatures). Bodies live in
-//! the kernel blob store (sha256-addressed) and are referenced by hash.
+//! the content-addressed blob store (sha256), referenced by hash — never
+//! inline in a column.
+//!
+//! Content capture is **per-source policy** (v0.7.0, config `[capture]`),
+//! not unconditional metadata-only:
+//! - Claude Code / Cursor: **metadata-only** — bodies are never captured at
+//!   all (the scanner never extracts them), so no blob is written.
+//! - Codex (`capture = full`, default): turn bodies ARE captured, but
+//!   **redacted** (secret-zero) before they reach the blob store, and the DB
+//!   still holds only their `sha256:` hash in `turn_content.content_hash` —
+//!   the table-is-hashes-only rule above is unchanged.
 //!
 //! # Schema versioning
 //!

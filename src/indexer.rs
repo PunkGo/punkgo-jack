@@ -19,6 +19,13 @@
 //! signatures, usage tokens. NEVER raw prompt/response/tool/thinking text.
 //! Each upsert site below has a `// PRIVACY: metadata only` comment that
 //! the code reviewer scans for.
+//!
+//! v0.7.0: the Claude Code path is **metadata-only** end to end (it maps to a
+//! `NormalizedTurn` whose blocks carry `content: None`, so nothing can be
+//! captured). Codex content capture is a separate, config-gated concern owned
+//! by the shared write core [`crate::scan::write_normalized_turn`]: it writes
+//! redacted bodies to the blob store and records only their `sha256:` hash in
+//! `turn_content` — this module's "metadata only to jack.db" rule is intact.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

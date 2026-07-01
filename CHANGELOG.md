@@ -4,7 +4,43 @@ All notable changes to `punkgo-jack` will be documented in this file.
 
 The format is loosely based on Keep a Changelog.
 
-## [Unreleased]
+## [0.7.0] - 2026-07-02
+
+### Added
+
+- **Codex CLI recording.** jack now records the full input/output of Codex CLI
+  sessions by parsing its rollout files (`$CODEX_HOME/sessions/**/rollout-*.jsonl`).
+  `punkgo-jack reindex --source codex` backfills every local session; `setup
+  codex` installs hooks (`SessionStart`, `Stop`) that rescan the active session
+  for freshness. Verified across 410 real rollouts.
+  - **Content capture** — a Codex turn's input/output/tool text is stored in the
+    content-addressed blob store (SHA-256, deduped) and referenced by hash;
+    metadata + hashes live in jack.db, bodies in the blob store.
+  - **Secret redaction (secret-zero).** Captured bodies are scrubbed before
+    storage: provider token shapes (OpenAI/Anthropic/GitHub/AWS/Google/Slack/JWT),
+    PEM private-key blocks, `scheme://user:pass@host` credentials, `Bearer`/`Basic`
+    tokens, sensitive `KEY=value` assignments, and live environment secret values.
+  - **Kernel receipts (E1).** Each Codex turn also emits a kernel `observe` event
+    (Merkle/TSA receipt), extending the "every AI action gets a receipt" thesis
+    to Codex. Emitted via a durable outbox (idempotent across reindex).
+- **`[capture]` config** (config-over-code): per-source capture policy. Default
+  `codex = "full"`, `claude-code`/`cursor` metadata-only. Override in
+  `~/.punkgo/config.toml` or via `PUNKGO_CAPTURE_<SOURCE>`.
+- **jack.db v2 schema**: `turn_content` table (per content block) + `turns.source`.
+  Forward-only migration; legacy DBs upgrade in place.
+- **MCP surface**: `turn_detail` returns captured content (bodies, when present);
+  `session_list` filters by `source`; `hidden_tokens` reports Codex reasoning
+  analytics (block count + opaque byte size).
+- **Claude Code hooks**: 4 new human-in-the-loop events (`PermissionRequest`,
+  `Elicitation`, `ElicitationResult`, `MessageDisplay`) — 15 → 19 hooks — plus
+  payload enrichment (`effort`, `prompt_id`, `permission_mode`, `agent_id`,
+  `agent_type`, SessionStart `model`).
+
+### Changed
+
+- Source-neutral write core: Claude Code and Codex feed one shared
+  `write_normalized_turn` path (no forked indexer). Claude Code behavior is
+  unchanged (metadata-only).
 
 ### Removed
 

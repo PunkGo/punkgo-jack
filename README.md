@@ -105,7 +105,7 @@ A root operator with the signing key could rebuild the tree — this is the sing
 | `presence` | Energy heatmap across agents |
 | `export` | Export events as markdown or JSON |
 | `serve` | MCP server (13 tools for agent self-query) |
-| `reindex` | Backfill transcript index (`--full`, `--since`, `--session`, `--dry-run`) |
+| `reindex` | Backfill transcript index (`--full`, `--since`, `--session`, `--source`, `--dry-run`) |
 | `upgrade` | Self-update (no re-setup needed) |
 
 ## Config
@@ -122,14 +122,37 @@ TSA anchoring is **on by default** (free DigiCert public service, rate-limited t
 
 Disable TSA: set `enabled = false` or `PUNKGO_TSA_ENABLED=false`. Other env vars: `PUNKGO_TSA_URL`, `PUNKGO_TSA_MIN_INTERVAL_SECS`.
 
+### Content capture (v0.7.0)
+
+Codex sessions are recorded with **full I/O** — the input/output of every turn is
+stored (secrets redacted) in the content-addressed blob store and referenced by
+hash. Claude Code and Cursor stay **metadata-only** (byte lengths, hashes, model
+ids — never body text), matching prior behavior. Change per source:
+
+```toml
+[capture]
+# codex = "full"           # default: full (bodies stored, redacted)
+# claude-code = "metadata" # default: metadata-only
+# cursor = "metadata"      # default: metadata-only
+```
+
+Env override: `PUNKGO_CAPTURE_CODEX=metadata`. An unrecognized value is treated
+as `metadata` (never captures bodies on a typo).
+
 ## Supported Tools
 
 | Tool | Status | Setup |
 |------|--------|-------|
-| **Claude Code** | Supported | `setup claude-code` — 15 hooks + statusline |
+| **Claude Code** | Supported | `setup claude-code` — 19 hooks + statusline |
+| **Codex CLI** | Supported | `setup codex` — rollout recording + rescan hooks |
 | **Cursor** | Supported | `setup cursor` — 9 hooks |
 | **MCP** | Built-in | `serve` — 13 tools for agent self-query |
 | Windsurf, Cline | Planned | — |
+
+Codex I/O is recorded by tailing its rollout files
+(`$CODEX_HOME/sessions/**/rollout-*.jsonl`); `setup codex` additionally installs
+hooks that rescan the active session for freshness. Backfill anytime with
+`punkgo-jack reindex --source codex`.
 
 <details>
 <summary>Dual-Tool Coexistence: Claude Code + Cursor</summary>
@@ -145,7 +168,8 @@ Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatica
 
 | Version | What changed |
 |---------|-------------|
-| **v0.6.2** | Reindex report matches DB exactly. |
+| **v0.7.0** | Codex CLI recording (rollout parse + content capture, redacted, kernel receipts), `[capture]` config, `turn_detail` content readback, 4 new Claude Code hooks. |
+| v0.6.2 | Reindex report matches DB exactly. |
 | v0.6.1 | Reindex accuracy, subagent scan, stable turn ordering. |
 | v0.6.0 | Transcript Archaeologist — jack.db index, 6 MCP tools, `reindex` CLI, 15 hooks, signature parser |
 | v0.5.4 | Built-in `roast` command (local coding data analysis) |
