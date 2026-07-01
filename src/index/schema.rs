@@ -177,6 +177,59 @@ pub fn init(conn: &Connection) -> Result<()> {
             )
         })?;
     }
+    migrate(conn)?;
+    Ok(())
+}
+
+/// Current jack.db schema version. Bump when adding a migration step below.
+const SCHEMA_VERSION: i64 = 1;
+
+/// Apply forward-only, incremental migrations to an existing jack.db, tracked
+/// via SQLite's `PRAGMA user_version`. Idempotent: a fully-migrated DB is a
+/// no-op. Both a fresh DB (base tables just created above) and a legacy DB
+/// (written by an older jack with fewer columns) converge to the current shape.
+fn migrate(conn: &Connection) -> Result<()> {
+    let current: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .context("reading user_version")?;
+    if current >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    if current < 1 {
+        // v1 — generalize the transcript index beyond Claude Code:
+        //   turns.source            which agent produced the turn (e.g. "codex")
+        //   turns.content_blob_hash SHA-256 of externalized turn content, set
+        //                           when the capture policy stores full I/O.
+        add_column_if_missing(conn, "turns", "source", "TEXT")?;
+        add_column_if_missing(conn, "turns", "content_blob_hash", "TEXT")?;
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+        .context("bumping user_version")?;
+    Ok(())
+}
+
+/// True if `table` already has a column named `column`.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    // `table`/`column` are internal constants, never user input — safe to
+    // interpolate into the PRAGMA (which does not accept bound parameters).
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == column);
+    Ok(exists)
+}
+
+/// `ALTER TABLE ... ADD COLUMN`, guarded so re-running never errors on an
+/// already-present column (belt-and-suspenders alongside `user_version`).
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    if !column_exists(conn, table, column)? {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )
+        .with_context(|| format!("adding column {table}.{column}"))?;
+    }
     Ok(())
 }
 
@@ -234,6 +287,32 @@ mod tests {
         init(&conn).unwrap();
         init(&conn).unwrap();
         init(&conn).unwrap();
+    }
+
+    #[test]
+    fn migrate_adds_v1_columns_and_sets_version() {
+        let conn = fresh_conn();
+        init(&conn).unwrap();
+        assert!(column_exists(&conn, "turns", "source").unwrap());
+        assert!(column_exists(&conn, "turns", "content_blob_hash").unwrap());
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrate_upgrades_legacy_turns_table() {
+        // Simulate a jack.db written by an older jack: base tables only,
+        // user_version still 0, missing the v1 columns.
+        let conn = fresh_conn();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.execute(SQL_SESSIONS, []).unwrap();
+        conn.execute(SQL_TURNS, []).unwrap();
+        assert!(!column_exists(&conn, "turns", "source").unwrap());
+        migrate(&conn).unwrap();
+        assert!(column_exists(&conn, "turns", "source").unwrap());
+        assert!(column_exists(&conn, "turns", "content_blob_hash").unwrap());
     }
 
     #[test]
