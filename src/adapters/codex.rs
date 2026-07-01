@@ -940,6 +940,7 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
     };
     let mut session_meta_seen = false;
     let mut first_timestamp: Option<String> = None;
+    let mut parse_warnings = 0usize;
 
     // Grouper needs the session id up front; if session_meta arrives later and
     // changes it (it is normally the first line), we adopt it before any turn
@@ -1003,8 +1004,26 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
                 }
             }
             "response_item" => {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(envelope.payload) {
-                    grouper.push_item(item);
+                // Capture the raw type before consuming the payload so a
+                // typed-parse failure (version drift on a known tag) is logged
+                // with context instead of silently dropped (eng review P2b-3).
+                let raw_type = envelope
+                    .payload
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("(missing)")
+                    .to_string();
+                match serde_json::from_value::<ResponseItem>(envelope.payload) {
+                    Ok(item) => grouper.push_item(item),
+                    Err(e) => {
+                        parse_warnings += 1;
+                        warn!(
+                            path = %path.display(),
+                            response_item_type = %raw_type,
+                            error = %e,
+                            "codex response_item failed typed parse; skipped"
+                        );
+                    }
                 }
             }
             _ => {} // event_msg / compacted: not authoritative content (AD5)
@@ -1019,7 +1038,11 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
     }
 
     let turns = grouper.turns;
-    Ok(ScanResult { session, turns })
+    Ok(ScanResult {
+        session,
+        turns,
+        parse_warnings,
+    })
 }
 
 /// Derive a session id from a rollout filename

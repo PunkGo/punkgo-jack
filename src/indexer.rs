@@ -68,6 +68,11 @@ pub struct ReindexReport {
     pub sessions_upserted: usize,
     pub duration_seconds: f64,
     pub model_variant_breakdown: HashMap<String, usize>,
+    /// Items whose typed payload failed to deserialize and were skipped
+    /// (version drift). 0 for the Claude Code path; surfaced for Codex so
+    /// silent data loss is visible in the reindex summary.
+    #[serde(default)]
+    pub parse_skipped: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -696,6 +701,9 @@ pub fn run_codex_reindex() -> Result<ReindexReport> {
     let policy = scanner.capture_policy();
     let source = scanner.source().to_string();
     let mut conn = index::open_jack_db()?;
+    // Same-run session dedup: guards against two rollout files sharing a
+    // session_meta.id clobbering each other (parity with Path B).
+    let mut seen_sessions: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (i, path) in files.iter().enumerate() {
         let scan_result = match scanner.scan_file(path) {
@@ -714,16 +722,35 @@ pub fn run_codex_reindex() -> Result<ReindexReport> {
 
         let session_id = scan_result.session.session_id.clone();
         let file_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        report.parse_skipped += scan_result.parse_warnings;
+
+        // Whole-file materialization: peak memory ~ this file's captured text.
+        // Fine at current sizes (max observed ~138 MB); warn if a rollout ever
+        // grows to where streaming would be needed (eng review P2b-3 note).
+        if file_len > 512 * 1024 * 1024 {
+            warn!(path = %path.display(), bytes = file_len, "very large rollout scanned whole-file in memory");
+        }
+
+        // Skip the per-session DELETE on a repeat session_id within this run so
+        // a second file merges (fork-safe INSERT OR IGNORE) instead of
+        // clobbering the first (eng review P2b-3 finding #6).
+        let first_time = seen_sessions.insert(session_id.clone());
+        if !first_time {
+            warn!(session_id = %session_id, path = %path.display(), "duplicate Codex session_id across rollout files; merging without clobber");
+        }
 
         let tx_result: Result<usize> = (|| {
             let tx = conn.transaction()?;
             let sid = &session_id;
 
-            // Idempotent re-scan: content before turns (join dependency),
-            // then signatures.
-            turn_content::delete_content_for_session(&tx, sid)?;
-            turns::delete_turns_for_session(&tx, sid)?;
-            sig_idx::delete_signatures_for_session(&tx, sid)?;
+            if first_time {
+                // Idempotent re-scan. Both thinking_signatures and turn_content
+                // resolve their rows by joining on `turns`, so BOTH must be
+                // deleted BEFORE the turns rows (eng review P2b-3 finding #5).
+                sig_idx::delete_signatures_for_session(&tx, sid)?;
+                turn_content::delete_content_for_session(&tx, sid)?;
+                turns::delete_turns_for_session(&tx, sid)?;
+            }
 
             write_session(&tx, &scan_result.session, Some(path.to_string_lossy().as_ref()))?;
 

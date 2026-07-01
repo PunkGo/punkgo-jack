@@ -268,6 +268,7 @@ fn run_reindex_codex(opts: &indexer::ReindexOptions) -> Result<()> {
     println!("  files failed     : {}", report.files_failed);
     println!("  sessions upserted: {}", report.sessions_upserted);
     println!("  turns upserted   : {}", report.turns_upserted);
+    println!("  parse skipped    : {}   (items dropped on typed-parse failure)", report.parse_skipped);
     println!("  duration         : {:.1}s", report.duration_seconds);
     Ok(())
 }

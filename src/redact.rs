@@ -33,9 +33,33 @@ const SECRET_ENV_MARKERS: &[&str] = &[
 ];
 
 /// (regex, kind) pairs for known secret shapes. Compiled once.
+///
+/// Order matters: whole-blob and capture-group patterns (PEM, connection
+/// strings, `Bearer` headers) run BEFORE the generic key=value assignment
+/// catch-all, so a token embedded in a header/URL is redacted by its precise
+/// pattern rather than slipping past the assignment value gate.
 static TOKEN_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
     let p = |re: &str| Regex::new(re).expect("valid redaction regex");
     vec![
+        // PEM private-key blocks (any label; multi-line). Unambiguous — always
+        // redact the whole block. `(?s)` makes `.` span newlines.
+        (
+            p(r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----"),
+            "private-key",
+        ),
+        // Connection-string credentials: scheme://user:PASSWORD@host. Redacts
+        // the password (capture group 1), keeps scheme/user/host legible.
+        (
+            p(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@"),
+            "conn-cred",
+        ),
+        // Authorization headers / bearer tokens: `Bearer <token>` /
+        // `Basic <token>`. Redacts the token (group 1) after the scheme word —
+        // catches opaque/custom tokens that match no provider shape.
+        (
+            p(r"(?i)\b(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})"),
+            "bearer",
+        ),
         // OpenAI keys: sk-..., sk-proj-..., etc.
         (p(r"sk-[A-Za-z0-9_-]{16,}"), "openai-key"),
         // Anthropic keys.
@@ -114,28 +138,57 @@ impl Redactor {
 
         // 2. Known token shapes + sensitive assignments.
         for (re, kind) in TOKEN_PATTERNS.iter() {
-            if *kind == "assignment" {
-                // Preserve the key, redact the value (group 2) — but only when
-                // the value actually looks like a secret. A sensitive-looking
-                // key name alone (`pubkey: 0x1`, `token: ERC20`, `key: value`)
-                // is NOT enough; otherwise ordinary content full of `key:` /
-                // `token:` (code, configs, blockchain data) gets shredded.
-                out = re
-                    .replace_all(&out, |caps: &regex::Captures| {
-                        if looks_like_secret_value(&caps[2]) {
+            match *kind {
+                "assignment" => {
+                    // Preserve the key, redact the value (group 2). A
+                    // sensitive-looking key name alone (`pubkey: 0x1`,
+                    // `token: ERC20`, `key: value`) is NOT enough for the
+                    // generic markers, or ordinary code/config/blockchain
+                    // content gets shredded. But `password`/`passwd`/
+                    // `credential` keys are high-precision: redact any value
+                    // >= 8 chars (real passwords are often letters-only, so
+                    // the digit+alpha entropy gate would miss them).
+                    out = re
+                        .replace_all(&out, |caps: &regex::Captures| {
+                            let key = &caps[1];
+                            let val = &caps[2];
+                            let kl = key.to_ascii_lowercase();
+                            let is_pw = kl.contains("password")
+                                || kl.contains("passwd")
+                                || kl.contains("credential");
+                            let redact = if is_pw {
+                                val.len() >= 8
+                            } else {
+                                looks_like_secret_value(val)
+                            };
+                            if redact {
+                                hits += 1;
+                                format!("{key}=[REDACTED:secret]")
+                            } else {
+                                caps[0].to_string()
+                            }
+                        })
+                        .into_owned();
+                }
+                // Capture-group patterns: redact only group 1 (the secret),
+                // keeping the surrounding shape (scheme://user:…@, `Bearer …`).
+                "conn-cred" | "bearer" => {
+                    let marker = format!("[REDACTED:{kind}]");
+                    out = re
+                        .replace_all(&out, |caps: &regex::Captures| {
                             hits += 1;
-                            format!("{}=[REDACTED:secret]", &caps[1])
-                        } else {
-                            caps[0].to_string()
-                        }
-                    })
-                    .into_owned();
-            } else {
-                let replacement = format!("[REDACTED:{kind}]");
-                let count = re.find_iter(&out).count();
-                if count > 0 {
-                    hits += count;
-                    out = re.replace_all(&out, replacement.as_str()).into_owned();
+                            caps[0].replacen(&caps[1], &marker, 1)
+                        })
+                        .into_owned();
+                }
+                // Whole-match shapes (provider keys, PEM blocks, JWT).
+                _ => {
+                    let replacement = format!("[REDACTED:{kind}]");
+                    let count = re.find_iter(&out).count();
+                    if count > 0 {
+                        hits += count;
+                        out = re.replace_all(&out, replacement.as_str()).into_owned();
+                    }
                 }
             }
         }
@@ -226,6 +279,49 @@ mod tests {
         let (out, hits) = r.redact("private_key = 0123456789abcdef0123456789abcdef");
         assert_eq!(hits, 1);
         assert!(out.contains("private_key=[REDACTED:secret]"), "got {out}");
+    }
+
+    #[test]
+    fn redacts_pem_private_key_block() {
+        let r = Redactor::with_env_values(vec![]);
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234\nabcd/EFGH+ijkl\n-----END RSA PRIVATE KEY-----";
+        let (out, hits) = r.redact(&format!("here is the key:\n{pem}\ndone"));
+        assert_eq!(hits, 1);
+        assert!(out.contains("[REDACTED:private-key]"), "got: {out}");
+        assert!(!out.contains("MIIEowIBAA"), "PEM body leaked: {out}");
+    }
+
+    #[test]
+    fn redacts_connection_string_password() {
+        let r = Redactor::with_env_values(vec![]);
+        let (out, hits) = r.redact("DATABASE_URL=postgres://appuser:Tr0ub4dor3@db.internal:5432/prod");
+        assert!(hits >= 1);
+        assert!(!out.contains("Tr0ub4dor3"), "db password leaked: {out}");
+        assert!(out.contains("postgres://appuser:"), "shape not preserved: {out}");
+        assert!(out.contains("@db.internal"), "host stripped: {out}");
+    }
+
+    #[test]
+    fn redacts_bearer_and_basic_tokens() {
+        let r = Redactor::with_env_values(vec![]);
+        // Opaque bearer token matching no provider shape.
+        let (out, _) = r.redact("curl -H \"Authorization: Bearer 4f9e8d7c6b5a49392817065f4e3d2c1b\"");
+        assert!(!out.contains("4f9e8d7c6b5a49392817065f4e3d2c1b"), "bearer token leaked: {out}");
+        assert!(out.contains("Bearer [REDACTED:bearer]"), "got: {out}");
+
+        let (out2, _) = r.redact("Authorization: Basic dXNlcjpwYXNzd29yZA==");
+        assert!(!out2.contains("dXNlcjpwYXNzd29yZA=="), "basic cred leaked: {out2}");
+    }
+
+    #[test]
+    fn redacts_letters_only_password() {
+        let r = Redactor::with_env_values(vec![]);
+        // No digit — the generic entropy gate would miss it, but a
+        // password-named key is high-precision.
+        let (out, hits) = r.redact("password: SuperSecretPassphrase");
+        assert_eq!(hits, 1);
+        assert!(!out.contains("SuperSecretPassphrase"), "password leaked: {out}");
+        assert!(out.contains("password=[REDACTED:secret]"), "got: {out}");
     }
 
     #[test]

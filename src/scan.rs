@@ -117,6 +117,9 @@ pub struct NormalizedSession {
 pub struct ScanResult {
     pub session: NormalizedSession,
     pub turns: Vec<NormalizedTurn>,
+    /// Count of items whose envelope parsed but whose typed payload failed to
+    /// deserialize (version drift). Surfaced so silent data loss is visible.
+    pub parse_warnings: usize,
 }
 
 /// A source that parses its on-disk format into a [`ScanResult`]. File
