@@ -185,14 +185,65 @@ pub fn init(conn: &Connection) -> Result<()> {
 const SCHEMA_VERSION: i64 = 1;
 
 /// Apply forward-only, incremental migrations to an existing jack.db, tracked
-/// via SQLite's `PRAGMA user_version`. Idempotent: a fully-migrated DB is a
-/// no-op. Both a fresh DB (base tables just created above) and a legacy DB
-/// (written by an older jack with fewer columns) converge to the current shape.
+/// via SQLite's `PRAGMA user_version`. Both a fresh DB (base tables just
+/// created above) and a legacy DB (written by an older jack with fewer
+/// columns) converge to the current shape.
+///
+/// Concurrency: `open_jack_db` runs on every process start, and Claude Code
+/// fires parallel hooks — so several processes can hit the first-upgrade
+/// window at once. The actual migration runs inside a `BEGIN IMMEDIATE`
+/// transaction; combined with the 5s `busy_timeout` set in `open_jack_db`,
+/// a losing writer blocks on the write lock, then re-reads `user_version`
+/// inside the txn and no-ops instead of racing a duplicate `ALTER TABLE`.
 fn migrate(conn: &Connection) -> Result<()> {
     let current: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .context("reading user_version")?;
+    if current == SCHEMA_VERSION {
+        // Fast path: already current. Avoids taking a write lock on every open.
+        return Ok(());
+    }
+    if current > SCHEMA_VERSION {
+        // DB was written by a newer jack. Migrations are forward-only, so we
+        // cannot downgrade it — and must not silently treat it as "migrated".
+        // New columns are additive, so an older binary can still read/write the
+        // rows it understands; proceed best-effort but make the mismatch loud.
+        tracing::warn!(
+            db_user_version = current,
+            binary_schema_version = SCHEMA_VERSION,
+            "jack.db schema is newer than this jack binary; running best-effort"
+        );
+        return Ok(());
+    }
+
+    // current < SCHEMA_VERSION: apply pending migrations atomically under an
+    // IMMEDIATE write lock. A mid-batch failure rolls the whole txn back
+    // (including the user_version bump), so the next open retries cleanly.
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .context("begin migration transaction")?;
+    match apply_migrations(conn) {
+        Ok(()) => conn
+            .execute_batch("COMMIT")
+            .context("commit migration transaction"),
+        Err(e) => {
+            // Best-effort rollback; surface the original error.
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
+/// Pending migration steps, run inside the `migrate` transaction. Re-reads
+/// `user_version` first so a writer that blocked on the IMMEDIATE lock sees
+/// the winner's result and no-ops. `user_version` is bumped to
+/// `SCHEMA_VERSION` only after every pending block; because the batch is one
+/// atomic transaction, a crash can never leave a half-applied schema.
+fn apply_migrations(conn: &Connection) -> Result<()> {
+    let current: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .context("re-reading user_version inside migration txn")?;
     if current >= SCHEMA_VERSION {
+        // Another process won the race and already migrated.
         return Ok(());
     }
     if current < 1 {
@@ -313,6 +364,22 @@ mod tests {
         migrate(&conn).unwrap();
         assert!(column_exists(&conn, "turns", "source").unwrap());
         assert!(column_exists(&conn, "turns", "content_blob_hash").unwrap());
+    }
+
+    #[test]
+    fn migrate_leaves_future_schema_version_intact() {
+        // A DB written by a NEWER jack (user_version > SCHEMA_VERSION) must not
+        // be errored on or silently "downgraded" — migrate() warns and no-ops,
+        // leaving the version untouched so the newer schema is preserved.
+        let conn = fresh_conn();
+        init(&conn).unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION + 1);
     }
 
     #[test]

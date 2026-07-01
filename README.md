@@ -156,14 +156,6 @@ Leave Cursor's Third-party Skills **enabled** — PunkGo deduplicates automatica
 | v0.4.1 | Cursor IDE support, dual-tool coexistence |
 | v0.4.0 | Verify, export, presence heatmap, MCP server |
 
-## PunkGo Roast
-
-Your AI has a personality. We built a test for it.
-
-**16 dog breeds. One prompt. Zero registration.** &rarr; [roast.punkgo.ai](https://roast.punkgo.ai)
-
-Jack also includes a built-in `punkgo-jack roast` command that analyzes your local coding data for personality signals. Run `punkgo-jack roast help` for details.
-
 ## License
 
 [MIT](LICENSE)
