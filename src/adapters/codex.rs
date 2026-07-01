@@ -724,6 +724,12 @@ struct RolloutGrouper<'a> {
     current_model: Option<String>,
     current_cwd: Option<String>,
     git_branch: Option<String>,
+    /// Timestamp of the envelope currently being processed.
+    current_ts: String,
+    /// Timestamp of the first item accumulated into the pending assistant turn.
+    pending_ts: Option<String>,
+    /// Response items that fell into `ResponseItem::Unknown` (unmodeled shape).
+    unknown_count: usize,
 }
 
 impl<'a> RolloutGrouper<'a> {
@@ -737,6 +743,9 @@ impl<'a> RolloutGrouper<'a> {
             current_model: None,
             current_cwd: None,
             git_branch: None,
+            current_ts: String::new(),
+            pending_ts: None,
+            unknown_count: 0,
         }
     }
 
@@ -747,10 +756,9 @@ impl<'a> RolloutGrouper<'a> {
         Some(self.redactor.redact(text).0)
     }
 
-    /// Emit a turn with the given role + blocks. `byte_len` on each block is
-    /// the length of the (redacted) stored body, or a size signal for opaque
-    /// blocks. Skips empty turns.
-    fn emit(&mut self, role: &str, blocks: Vec<NormalizedBlock>) {
+    /// Emit a turn with the given role + blocks, stamped with `timestamp`.
+    /// Skips empty turns.
+    fn emit(&mut self, role: &str, blocks: Vec<NormalizedBlock>, timestamp: String) {
         if blocks.is_empty() {
             return;
         }
@@ -762,7 +770,7 @@ impl<'a> RolloutGrouper<'a> {
             session_id: self.session_id.clone(),
             parent_turn_uuid: None,
             role: role.to_string(),
-            timestamp: String::new(), // stamped by caller per-line if desired
+            timestamp,
             cwd: self.current_cwd.clone(),
             git_branch: self.git_branch.clone(),
             is_sidechain: false,
@@ -777,11 +785,22 @@ impl<'a> RolloutGrouper<'a> {
         });
     }
 
-    /// Flush any pending assistant work as an assistant turn.
+    /// Append a block to the pending assistant turn, stamping the turn's start
+    /// timestamp on the first block.
+    fn add_pending(&mut self, block: NormalizedBlock) {
+        if self.pending_assistant.is_empty() {
+            self.pending_ts = Some(self.current_ts.clone());
+        }
+        self.pending_assistant.push(block);
+    }
+
+    /// Flush any pending assistant work as an assistant turn, stamped with the
+    /// timestamp of its first item.
     fn flush_assistant(&mut self) {
         if !self.pending_assistant.is_empty() {
             let blocks = std::mem::take(&mut self.pending_assistant);
-            self.emit("assistant", blocks);
+            let ts = self.pending_ts.take().unwrap_or_else(|| self.current_ts.clone());
+            self.emit("assistant", blocks, ts);
         }
     }
 
@@ -825,24 +844,27 @@ impl<'a> RolloutGrouper<'a> {
                 "user" => {
                     self.flush_assistant();
                     let blocks = self.message_blocks(&m);
-                    self.emit("user", blocks);
+                    let ts = self.current_ts.clone();
+                    self.emit("user", blocks, ts);
                 }
                 "developer" => {
                     self.flush_assistant();
                     let blocks = self.message_blocks(&m);
-                    self.emit("developer", blocks);
+                    let ts = self.current_ts.clone();
+                    self.emit("developer", blocks, ts);
                 }
                 // assistant (or any other) message is part of the assistant's
                 // in-flight response.
                 _ => {
-                    let mut blocks = self.message_blocks(&m);
-                    self.pending_assistant.append(&mut blocks);
+                    for block in self.message_blocks(&m) {
+                        self.add_pending(block);
+                    }
                 }
             },
             ResponseItem::Reasoning(r) => {
                 // Opaque: never store the (encrypted) body; record its size.
                 let byte_len = r.encrypted_content.as_deref().map(|s| s.len()).unwrap_or(0);
-                self.pending_assistant.push(NormalizedBlock {
+                self.add_pending(NormalizedBlock {
                     kind: "reasoning".to_string(),
                     role: Some("assistant".to_string()),
                     signature_present: true,
@@ -852,75 +874,84 @@ impl<'a> RolloutGrouper<'a> {
                 });
             }
             ResponseItem::FunctionCall(fc) => {
-                self.pending_assistant.push(NormalizedBlock {
+                let content = self.capture(&fc.arguments);
+                self.add_pending(NormalizedBlock {
                     kind: "tool_call".to_string(),
                     role: Some("assistant".to_string()),
                     tool_name: Some(fc.name),
                     byte_len: fc.arguments.len(),
-                    content: self.capture(&fc.arguments),
+                    content,
                     ..Default::default()
                 });
             }
             ResponseItem::CustomToolCall(c) => {
-                self.pending_assistant.push(NormalizedBlock {
+                let content = self.capture(&c.input);
+                self.add_pending(NormalizedBlock {
                     kind: "tool_call".to_string(),
                     role: Some("assistant".to_string()),
                     tool_name: Some(c.name),
                     byte_len: c.input.len(),
-                    content: self.capture(&c.input),
+                    content,
                     ..Default::default()
                 });
             }
             ResponseItem::FunctionCallOutput(o) => {
                 let text = value_to_text(&o.output);
-                self.pending_assistant.push(NormalizedBlock {
+                let content = self.capture(&text);
+                self.add_pending(NormalizedBlock {
                     kind: "tool_result".to_string(),
                     role: Some("tool".to_string()),
                     byte_len: text.len(),
-                    content: self.capture(&text),
+                    content,
                     ..Default::default()
                 });
             }
             ResponseItem::CustomToolCallOutput(o) => {
                 let text = value_to_text(&o.output);
-                self.pending_assistant.push(NormalizedBlock {
+                let content = self.capture(&text);
+                self.add_pending(NormalizedBlock {
                     kind: "tool_result".to_string(),
                     role: Some("tool".to_string()),
                     byte_len: text.len(),
-                    content: self.capture(&text),
+                    content,
                     ..Default::default()
                 });
             }
             ResponseItem::WebSearchCall(w) => {
                 let text = value_to_text(&w.action);
-                self.pending_assistant.push(NormalizedBlock {
+                let content = self.capture(&text);
+                self.add_pending(NormalizedBlock {
                     kind: "tool_call".to_string(),
                     role: Some("assistant".to_string()),
                     tool_name: Some("web_search".to_string()),
                     byte_len: text.len(),
-                    content: self.capture(&text),
+                    content,
                     ..Default::default()
                 });
             }
-            ResponseItem::ToolSearchCall(_) => self.pending_assistant.push(NormalizedBlock {
+            ResponseItem::ToolSearchCall(_) => self.add_pending(NormalizedBlock {
                 kind: "tool_call".to_string(),
                 role: Some("assistant".to_string()),
                 tool_name: Some("tool_search".to_string()),
                 ..Default::default()
             }),
-            ResponseItem::ToolSearchOutput(_) => self.pending_assistant.push(NormalizedBlock {
+            ResponseItem::ToolSearchOutput(_) => self.add_pending(NormalizedBlock {
                 kind: "tool_result".to_string(),
                 role: Some("tool".to_string()),
                 ..Default::default()
             }),
-            ResponseItem::ImageGenerationCall(_) => self.pending_assistant.push(NormalizedBlock {
+            ResponseItem::ImageGenerationCall(_) => self.add_pending(NormalizedBlock {
                 kind: "image".to_string(),
                 role: Some("assistant".to_string()),
                 tool_name: Some("image_generation".to_string()),
                 ..Default::default()
             }),
             // ghost_snapshot: a git-internal marker, not conversational content.
-            ResponseItem::GhostSnapshot(_) | ResponseItem::Unknown => {}
+            ResponseItem::GhostSnapshot(_) => {}
+            // An unmodeled response_item shape. Counted so a content-bearing
+            // future shape does not vanish without a trace (surfaced in
+            // ScanResult.parse_warnings -> reindex report).
+            ResponseItem::Unknown => self.unknown_count += 1,
         }
     }
 }
@@ -970,6 +1001,9 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
         if first_timestamp.is_none() {
             first_timestamp = envelope.timestamp.clone();
         }
+        // Stamp the grouper with this envelope's time so emitted turns carry a
+        // real timestamp (cross-model review: turns were always empty).
+        grouper.current_ts = envelope.timestamp.clone().unwrap_or_default();
 
         match envelope.kind.as_str() {
             "session_meta" => {
@@ -1037,6 +1071,8 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
         session.started_at = first_timestamp.unwrap_or_else(now_iso_fallback);
     }
 
+    // Fold unmodeled-shape count into the surfaced parse warnings.
+    parse_warnings += grouper.unknown_count;
     let turns = grouper.turns;
     Ok(ScanResult {
         session,

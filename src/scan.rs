@@ -69,6 +69,11 @@ pub struct NormalizedBlock {
     /// Block body available for capture. `None` = opaque / not extracted.
     /// Ignored (never stored) under [`CapturePolicy::MetadataOnly`].
     pub content: Option<String>,
+    /// A pre-computed `sha256:` content hash carried from the source, if any
+    /// (e.g. a Claude Code scanner that already hashed the block). Preserved
+    /// into `content_blocks_meta` under any policy — MetadataOnly never
+    /// re-hashes bodies, so without this a precomputed hash would be lost.
+    pub content_hash: Option<String>,
 }
 
 /// A source-neutral turn ready for the shared write core.
@@ -238,28 +243,31 @@ pub fn write_normalized_turn(
 ) -> Result<bool> {
     let scanned = now_iso();
 
-    // Per-block content hashes (Full only). Compute + persist bodies first so
-    // the turns row's convenience hash can summarize them.
+    // Per-block content hashes. Full: store each body in the blob store and
+    // use its hash; a body-less (opaque) block keeps any precomputed hash.
+    // MetadataOnly: never store bodies — preserve only precomputed hashes.
     let mut block_hashes: Vec<Option<String>> = Vec::with_capacity(turn.blocks.len());
-    if policy == CapturePolicy::Full {
-        for block in &turn.blocks {
-            let hash = match &block.content {
+    for block in &turn.blocks {
+        let hash = if policy == CapturePolicy::Full {
+            match &block.content {
                 Some(body) => Some(blob::store(body)?),
-                None => None,
-            };
-            block_hashes.push(hash);
-        }
-    } else {
-        block_hashes.resize(turn.blocks.len(), None);
+                None => block.content_hash.clone(),
+            }
+        } else {
+            block.content_hash.clone()
+        };
+        block_hashes.push(hash);
     }
 
-    // Whole-turn convenience hash: digest of the present block hashes (Full).
+    // Whole-turn reference: a manifest of the per-block hashes, itself written
+    // to the blob store so `content_blob_hash` is a RESOLVABLE reference (not a
+    // dangling digest). Resolving it yields the newline-joined block hashes.
     let content_blob_hash = if policy == CapturePolicy::Full {
         let joined: String = block_hashes.iter().flatten().cloned().collect::<Vec<_>>().join("\n");
         if joined.is_empty() {
             None
         } else {
-            Some(format!("sha256:{}", blob::hash_bytes(joined.as_bytes())))
+            Some(blob::store(&joined)?)
         }
     } else {
         None

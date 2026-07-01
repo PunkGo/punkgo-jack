@@ -941,6 +941,15 @@ fn backfill_kernel_event_id(conn: &Connection, turn_uuid: &str, event_id: &str) 
 /// one-event). So on daemon-unreachable we simply leave turns pending and stop;
 /// the next drain (startup reconcile or reindex) retries. Returns the count
 /// emitted this call.
+///
+/// Delivery is **at-least-once**, not exactly-once: there is a narrow window
+/// where `client.send()` commits the kernel event but the process dies before
+/// `backfill_kernel_event_id`. The turn stays pending and a later drain
+/// re-emits, producing a duplicate append-only receipt for that turn. Closing
+/// this fully needs kernel-side idempotency (dedup on the deterministic target
+/// `codex/turn/{turn_uuid}`), which is a kernel change and out of scope for the
+/// jack-only v0.7.0 work (tracked in TODOS.md). The window is a single UPDATE
+/// wide and the failure mode is a redundant receipt, not data loss/corruption.
 pub fn drain_codex_receipts() -> Result<usize> {
     let conn = index::open_jack_db()?;
     let pending = collect_pending_codex_receipts(&conn)?;
@@ -1157,25 +1166,35 @@ fn normalized_turn_from_cc_record(record: &TurnRecord) -> crate::scan::Normalize
         .content_blocks
         .iter()
         .map(|b| match b {
-            ContentBlockRecord::Text { byte_len, .. } => crate::scan::NormalizedBlock {
+            ContentBlockRecord::Text {
+                byte_len,
+                content_hash,
+            } => crate::scan::NormalizedBlock {
                 kind: "text".to_string(),
                 byte_len: *byte_len,
+                content_hash: content_hash.clone(),
                 ..Default::default()
             },
             ContentBlockRecord::ToolUse {
-                name, byte_len, ..
+                name,
+                byte_len,
+                content_hash,
             } => crate::scan::NormalizedBlock {
                 kind: "tool_use".to_string(),
                 tool_name: Some(name.clone()),
                 byte_len: *byte_len,
+                content_hash: content_hash.clone(),
                 ..Default::default()
             },
             ContentBlockRecord::ToolResult {
-                byte_len, is_error, ..
+                byte_len,
+                is_error,
+                content_hash,
             } => crate::scan::NormalizedBlock {
                 kind: "tool_result".to_string(),
                 is_error: *is_error,
                 byte_len: *byte_len,
+                content_hash: content_hash.clone(),
                 ..Default::default()
             },
             ContentBlockRecord::Thinking {

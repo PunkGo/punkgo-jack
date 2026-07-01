@@ -64,8 +64,9 @@ static TOKEN_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
         (p(r"sk-[A-Za-z0-9_-]{16,}"), "openai-key"),
         // Anthropic keys.
         (p(r"sk-ant-[A-Za-z0-9_-]{16,}"), "anthropic-key"),
-        // GitHub tokens: ghp_, gho_, ghu_, ghs_, ghr_.
+        // GitHub tokens: ghp_, gho_, ghu_, ghs_, ghr_, and fine-grained PATs.
         (p(r"gh[pousr]_[A-Za-z0-9]{20,}"), "github-token"),
+        (p(r"github_pat_[0-9A-Za-z_]{20,}"), "github-token"),
         // AWS access key id.
         (p(r"AKIA[0-9A-Z]{16}"), "aws-access-key"),
         // Google API key.
@@ -150,20 +151,9 @@ impl Redactor {
                     // the digit+alpha entropy gate would miss them).
                     out = re
                         .replace_all(&out, |caps: &regex::Captures| {
-                            let key = &caps[1];
-                            let val = &caps[2];
-                            let kl = key.to_ascii_lowercase();
-                            let is_pw = kl.contains("password")
-                                || kl.contains("passwd")
-                                || kl.contains("credential");
-                            let redact = if is_pw {
-                                val.len() >= 8
-                            } else {
-                                looks_like_secret_value(val)
-                            };
-                            if redact {
+                            if secret_assignment_value_should_redact(&caps[1], &caps[2]) {
                                 hits += 1;
-                                format!("{key}=[REDACTED:secret]")
+                                format!("{}=[REDACTED:secret]", &caps[1])
                             } else {
                                 caps[0].to_string()
                             }
@@ -197,20 +187,37 @@ impl Redactor {
     }
 }
 
-/// Heuristic: does a value assigned to a sensitive-named key actually look
-/// like a secret (vs. an ordinary short word / identifier)? Requires a
-/// reasonably long, mixed alphanumeric run — real API keys / tokens are long
-/// and high-entropy. This deliberately errs toward redaction for long hex
-/// (a raw private key is indistinguishable from a long hex id by shape, so
-/// secret-zero wins), while sparing `key: value` / `token: ERC20` / short ids.
-fn looks_like_secret_value(v: &str) -> bool {
-    const MIN_SECRET_VALUE_LEN: usize = 16;
-    if v.len() < MIN_SECRET_VALUE_LEN {
+/// Decide whether a `KEY[:=]value` value should be redacted, given the key
+/// name and the value. Secret-zero (iron law) is the priority; the only reason
+/// not to redact every value on a sensitive-named key is that some key names
+/// (`pubkey`, a React `key`, `authToken: refresh`) are frequently innocent, and
+/// blindly shredding them would gut the recorded content.
+///
+/// - **Unambiguous secret keys** (`password`/`passwd`/`credential`/`secret`/
+///   `apikey`): redact any value >= 8 chars. These names are never innocent, so
+///   even a letters-only value is a secret (cross-model review finding: an
+///   entropy gate here misses `password: SuperSecretPassphrase`).
+/// - **Ambiguous keys** (`key`/`token`/`auth`): redact any value >= 16 chars,
+///   letters-only included (catches opaque API tokens like
+///   `AUTH_TOKEN=abcdefghijklmnopqrstuvwxyz`) while sparing short identifiers
+///   (`key: value`, `token: ERC20`, `pubkey: 0xAbC`).
+fn secret_assignment_value_should_redact(key: &str, value: &str) -> bool {
+    // Never re-redact a marker a prior pattern already inserted (e.g. a PEM
+    // block redacted to `[REDACTED:private-key]` sitting after a `key:`).
+    if value.starts_with("[REDACTED:") {
         return false;
     }
-    let has_digit = v.chars().any(|c| c.is_ascii_digit());
-    let has_alpha = v.chars().any(|c| c.is_ascii_alphabetic());
-    has_digit && has_alpha
+    let kl = key.to_ascii_lowercase();
+    let unambiguous = kl.contains("password")
+        || kl.contains("passwd")
+        || kl.contains("credential")
+        || kl.contains("secret")
+        || kl.contains("apikey");
+    if unambiguous {
+        value.len() >= 8
+    } else {
+        value.len() >= 16
+    }
 }
 
 /// True if an env var *name* marks its value as a likely secret.
@@ -322,6 +329,24 @@ mod tests {
         assert_eq!(hits, 1);
         assert!(!out.contains("SuperSecretPassphrase"), "password leaked: {out}");
         assert!(out.contains("password=[REDACTED:secret]"), "got: {out}");
+    }
+
+    #[test]
+    fn redacts_letters_only_token_on_sensitive_key() {
+        // Cross-model review finding: a letters-only value on a key/token/auth
+        // key (no digit) previously slipped the entropy gate.
+        let r = Redactor::with_env_values(vec![]);
+        for c in [
+            "API_KEY=SuperSecretPassphraseLong",
+            "AUTH_TOKEN=abcdefghijklmnopqrstuvwxyz",
+        ] {
+            let (out, hits) = r.redact(c);
+            assert_eq!(hits, 1, "letters-only secret leaked: {c} -> {out}");
+            assert!(out.contains("[REDACTED:secret]"), "got: {out}");
+        }
+        // github fine-grained PAT shape.
+        let (out2, _) = r.redact("token github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ");
+        assert!(out2.contains("[REDACTED:github-token]"), "got: {out2}");
     }
 
     #[test]
