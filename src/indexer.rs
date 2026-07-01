@@ -53,6 +53,11 @@ pub struct ReindexOptions {
     pub session: Option<String>,
     /// Walk and parse but do not write anything to jack.db.
     pub dry_run: bool,
+    /// Data source to reindex. `None`/`claude-code` uses the Claude Code
+    /// transcript path below; `codex` routes to the Codex rollout scanner
+    /// (AD2 source routing). Full multi-source write routing lands in P2b;
+    /// P2 wires only the Codex `--dry-run` validation path.
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

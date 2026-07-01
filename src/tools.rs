@@ -868,6 +868,9 @@ pub fn punkgo_reindex(params: PunkgoReindexParams) -> Result<CallToolResult> {
             since: params.since,
             session: params.session,
             dry_run: params.dry_run.unwrap_or(false),
+            // MCP reindex targets Claude Code transcripts; Codex source
+            // routing is exposed via the CLI (`reindex --source codex`) only.
+            source: None,
         };
         if !opts.full && opts.since.is_none() && opts.session.is_none() {
             return Ok(err_tool_result(

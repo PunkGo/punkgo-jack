@@ -84,7 +84,9 @@ fn print_usage() {
          \x20 --full                  Re-scan every transcript file\n\
          \x20 --since <TS>            Only files with mtime >= ISO 8601 timestamp\n\
          \x20 --session <ID>          Only this session's transcript\n\
+         \x20 --source <NAME>         Data source: claude-code (default) | codex\n\
          \x20 --dry-run               Parse and report counts, do not write\n\
+         \x20                         (codex source currently supports --dry-run only)\n\
          \n\
          Ingest options:\n\
          \x20 --source <NAME>         Data source (claude-code, cursor)\n\
@@ -202,8 +204,20 @@ fn run_reindex(args: &mut impl Iterator<Item = String>) -> Result<()> {
             "--session" => {
                 opts.session = Some(args.next().context("--session requires a session id")?);
             }
+            "--source" => {
+                opts.source = Some(args.next().context("--source requires a name")?);
+            }
             other => anyhow::bail!("unknown reindex option: {other}"),
         }
+    }
+
+    // Source routing (AD2). Codex reindexes the rollout tree, not
+    // ~/.claude/projects. P2 wires the validation-only `--dry-run` path; the
+    // Codex write path lands in P2b.
+    match opts.source.as_deref() {
+        Some("codex") => return run_reindex_codex(&opts),
+        Some("claude-code") | None => {}
+        Some(other) => anyhow::bail!("unknown reindex source: {other} (expected claude-code, codex)"),
     }
 
     if !opts.full && opts.since.is_none() && opts.session.is_none() {
@@ -228,6 +242,79 @@ fn run_reindex(args: &mut impl Iterator<Item = String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Codex source routing for `reindex`. P2 first cut: validation-only. The
+/// dry-run parses every rollout file and prints an evidence report (shape
+/// distribution, call_id linkage, turn granularity) without writing to
+/// jack.db. The real ingest/write path is P2b.
+fn run_reindex_codex(opts: &indexer::ReindexOptions) -> Result<()> {
+    if !opts.dry_run {
+        anyhow::bail!(
+            "reindex --source codex currently supports --dry-run only \
+             (the Codex write path lands in v0.7.0 P2b). \
+             Run: punkgo-jack reindex --source codex --dry-run"
+        );
+    }
+
+    let root = adapters::codex::codex_sessions_root()?;
+    println!("codex reindex (dry-run) scanning: {}", root.display());
+    let report = adapters::codex::dry_run_scan(&root)?;
+    print_codex_dry_run_report(&report);
+    Ok(())
+}
+
+fn print_codex_dry_run_report(report: &adapters::codex::CodexDryRunReport) {
+    println!("codex dry-run complete:");
+    println!("  files scanned     : {}", report.files_scanned);
+    println!("  files failed      : {}", report.files_failed);
+    println!("  files truncated   : {}   (mid-file I/O error, remainder unread)", report.files_truncated);
+    println!("  lines total       : {}", report.lines_total);
+    println!("  lines blank       : {}", report.lines_blank);
+    println!(
+        "  hard parse errors : {}   (acceptance: 0)",
+        report.hard_parse_errors
+    );
+    println!("  unknown items     : {}   (unmodeled response_item shapes)", report.unknown_response_items);
+
+    print_count_map("envelope types", &report.envelope_type_counts);
+    print_count_map("response_item shapes", &report.response_item_type_counts);
+    if !report.typed_parse_warnings.is_empty() {
+        print_count_map("TYPED PARSE WARNINGS (modeled shape drifted)", &report.typed_parse_warnings);
+    }
+    print_count_map("message roles", &report.message_role_counts);
+    print_count_map("message content parts", &report.message_content_type_counts);
+
+    println!("  reasoning         : {} total, {} encrypted, {} with summary",
+        report.reasoning_total, report.reasoning_with_encrypted, report.reasoning_with_summary);
+
+    println!("  --- call_id linkage (join key = call_id) ---");
+    println!("  tool calls        : {}", report.tool_calls);
+    println!("  tool outputs      : {}", report.tool_outputs);
+    println!("  matched           : {}", report.calls_matched);
+    println!("  orphan calls      : {}   (call, no output in file)", report.orphan_calls);
+    println!("  orphan outputs    : {}   (output, no call in file)", report.orphan_outputs);
+    println!("  calls with fc_ id : {}   (informational; not a linkage key)", report.calls_with_fc_id);
+    println!("  non-string outputs: {}   (output was array/object)", report.outputs_non_string);
+
+    println!("  --- AD3 turn-granularity evidence ---");
+    println!("  user-message turns: {}", report.user_message_turns);
+    println!("  max items / turn  : {}", report.max_items_per_turn);
+    println!("  avg items / turn  : {:.1}", report.avg_items_per_turn());
+    println!("  session_meta count: {}", report.session_meta_count);
+    println!("  duration          : {:.1}s", report.duration_seconds);
+}
+
+fn print_count_map(label: &str, map: &std::collections::BTreeMap<String, usize>) {
+    if map.is_empty() {
+        return;
+    }
+    println!("  {label}:");
+    let mut sorted: Vec<_> = map.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    for (k, v) in sorted {
+        println!("    {v:8} {k}");
+    }
 }
 
 fn run_export(args: &mut impl Iterator<Item = String>) -> Result<()> {
