@@ -78,11 +78,20 @@ static TOKEN_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
             p(r"eyJ[A-Za-z0-9_-]{6,}\.eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}"),
             "jwt",
         ),
-        // KEY=value / KEY: value where KEY looks sensitive. The value (quoted
-        // or an unspaced run) is captured in group 2 and redacted; the key is
-        // preserved so the shape stays legible.
+        // JSON / quoted assignment: "sensitive_key": "value with spaces".
+        // The unquoted pattern below cannot capture a quoted value containing
+        // spaces (Codex tool args/results are JSON-shaped, a common leak path).
+        // Group 1 = key, group 2 = quoted value (spaces allowed).
         (
-            p(r#"(?i)([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)\s*[:=]\s*["']?([^\s"']{6,})["']?"#),
+            p(r#"(?i)"([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)"\s*:\s*"([^"]{1,})""#),
+            "json-assignment",
+        ),
+        // KEY=value / KEY: value where KEY looks sensitive. The value (an
+        // unspaced run) is captured in group 2 and redacted; the key is
+        // preserved so the shape stays legible. Length gating happens in
+        // `secret_assignment_value_should_redact`.
+        (
+            p(r#"(?i)([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)\s*[:=]\s*["']?([^\s"']{1,})["']?"#),
             "assignment",
         ),
     ]
@@ -140,20 +149,22 @@ impl Redactor {
         // 2. Known token shapes + sensitive assignments.
         for (re, kind) in TOKEN_PATTERNS.iter() {
             match *kind {
-                "assignment" => {
-                    // Preserve the key, redact the value (group 2). A
-                    // sensitive-looking key name alone (`pubkey: 0x1`,
-                    // `token: ERC20`, `key: value`) is NOT enough for the
-                    // generic markers, or ordinary code/config/blockchain
-                    // content gets shredded. But `password`/`passwd`/
-                    // `credential` keys are high-precision: redact any value
-                    // >= 8 chars (real passwords are often letters-only, so
-                    // the digit+alpha entropy gate would miss them).
+                "assignment" | "json-assignment" => {
+                    // Preserve the key, redact the value (group 2). Unambiguous
+                    // secret keys redact any value; ambiguous keys
+                    // (`key`/`token`/`auth`) need a long value so ordinary
+                    // code/config (`pubkey: 0x1`, `token: ERC20`) is not
+                    // shredded. JSON form keeps the quoted shape.
+                    let json = *kind == "json-assignment";
                     out = re
                         .replace_all(&out, |caps: &regex::Captures| {
                             if secret_assignment_value_should_redact(&caps[1], &caps[2]) {
                                 hits += 1;
-                                format!("{}=[REDACTED:secret]", &caps[1])
+                                if json {
+                                    format!("\"{}\": \"[REDACTED:secret]\"", &caps[1])
+                                } else {
+                                    format!("{}=[REDACTED:secret]", &caps[1])
+                                }
                             } else {
                                 caps[0].to_string()
                             }
@@ -214,7 +225,8 @@ fn secret_assignment_value_should_redact(key: &str, value: &str) -> bool {
         || kl.contains("secret")
         || kl.contains("apikey");
     if unambiguous {
-        value.len() >= 8
+        // These key names are never innocent — redact any non-empty value.
+        !value.is_empty()
     } else {
         value.len() >= 16
     }
@@ -347,6 +359,26 @@ mod tests {
         // github fine-grained PAT shape.
         let (out2, _) = r.redact("token github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ");
         assert!(out2.contains("[REDACTED:github-token]"), "got: {out2}");
+    }
+
+    #[test]
+    fn redacts_json_quoted_secrets_with_spaces() {
+        // Final codex review: JSON-shaped tool args/results (common in Codex
+        // rollouts) with quoted keys + spaced values slipped the unquoted regex.
+        let r = Redactor::with_env_values(vec![]);
+        let (out, _) =
+            r.redact(r#"{"db_password": "correct horse battery staple", "port": 5432}"#);
+        assert!(!out.contains("correct horse battery staple"), "json secret leaked: {out}");
+        assert!(out.contains(r#""db_password": "[REDACTED:secret]""#), "got: {out}");
+        assert!(out.contains("\"port\": 5432"), "non-secret field survived");
+
+        // Ambiguous key with a short value is spared (avoid over-redaction).
+        let (_, hits) = r.redact(r#"{"api_key": "short"}"#);
+        assert_eq!(hits, 0, "short ambiguous json value should be spared");
+
+        // Unambiguous key redacts even a short quoted value.
+        let (out3, _) = r.redact(r#"{"client_secret": "x9"}"#);
+        assert!(!out3.contains("\"x9\""), "unambiguous short secret leaked: {out3}");
     }
 
     #[test]

@@ -253,21 +253,21 @@ impl HookAdapter for ClaudeCodeAdapter {
                 });
             }
             "ElicitationResult" => {
-                // The user responded to an MCP elicitation. `content` is the
-                // user's free-text response — externalize (may be large).
+                // The user responded to an MCP elicitation. Claude Code stays
+                // METADATA-ONLY: this is a decision-point event, not a content
+                // capture (the plan is explicit). The response may contain a
+                // secret the user typed to the server, so record only its size,
+                // never the body (and never an un-redacted preview).
                 let mut meta = build_session_metadata(raw);
                 if let Some(v) = raw.get("server") {
                     meta.insert("server".into(), v.clone());
                 }
-                if let Some(s) = raw.get("content").and_then(Value::as_str) {
-                    let value = crate::blob::externalize_or_inline(
-                        "elicitation_response",
-                        s,
-                        max_inline_bytes(),
-                    )
-                    .unwrap_or_else(|_| json!({ "inline": s }));
-                    meta.insert("elicitation_response".into(), value);
-                }
+                let resp_len = raw
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                meta.insert("response_byte_len".into(), json!(resp_len));
                 let server = str_field(raw, "server");
                 return Ok(IngestEvent {
                     actor_id: "claude-code".into(),
@@ -279,25 +279,17 @@ impl HookAdapter for ClaudeCodeAdapter {
                 });
             }
             "MessageDisplay" => {
-                // Display-only: an assistant message was shown. `message` is
-                // the assistant text — externalize the full body, preview the
-                // label. No permission_mode on this event.
+                // Display-only, high-frequency, and redundant with the
+                // transcript. Claude Code stays metadata-only: record the
+                // message size, never the body or a preview of it.
                 let mut meta = build_session_metadata(raw);
-                let msg = str_field(raw, "message");
-                if !msg.is_empty() {
-                    let value = crate::blob::externalize_or_inline(
-                        "display_message",
-                        msg,
-                        max_inline_bytes(),
-                    )
-                    .unwrap_or_else(|_| json!({ "inline": msg }));
-                    meta.insert("display_message".into(), value);
-                }
+                let msg_len = str_field(raw, "message").len();
+                meta.insert("message_byte_len".into(), json!(msg_len));
                 return Ok(IngestEvent {
                     actor_id: "claude-code".into(),
                     target: "message:display".into(),
                     event_type: "message_display".into(),
-                    content: format!("Message displayed: {}", display_preview(msg, 200)),
+                    content: "Message displayed".into(),
                     metadata: meta,
                     source: "claude-code".into(),
                 });
@@ -1520,9 +1512,10 @@ mod tests {
         let r = adapter.transform(&raw2).unwrap();
         assert_eq!(r.event_type, "elicitation_result");
         assert_eq!(r.target, "elicitation_result:svelte_mcp");
-        // User response externalized (small → inline).
-        let resp = r.metadata.get("elicitation_response").expect("response stored");
-        assert_eq!(resp.get("inline").and_then(Value::as_str), Some("yes, use the dark theme"));
+        // Metadata-only: size recorded, body NEVER stored (may hold a secret).
+        assert_eq!(r.metadata.get("response_byte_len"), Some(&json!("yes, use the dark theme".len())));
+        let serialized = serde_json::to_string(&r.metadata).unwrap();
+        assert!(!serialized.contains("dark theme"), "elicitation body leaked: {serialized}");
     }
 
     #[test]
@@ -1537,9 +1530,11 @@ mod tests {
         let event = adapter.transform(&raw).unwrap();
         assert_eq!(event.event_type, "message_display");
         assert_eq!(event.target, "message:display");
-        assert!(event.content.starts_with("Message displayed: "));
-        let dm = event.metadata.get("display_message").expect("message stored");
-        assert_eq!(dm.get("inline").and_then(Value::as_str), Some("Here is the plan."));
+        // Metadata-only: size recorded, body and preview NEVER stored.
+        assert_eq!(event.content, "Message displayed");
+        assert_eq!(event.metadata.get("message_byte_len"), Some(&json!("Here is the plan.".len())));
+        let serialized = serde_json::to_string(&event.metadata).unwrap();
+        assert!(!serialized.contains("Here is the plan"), "message body leaked: {serialized}");
         // MessageDisplay has no permission_mode (per docs) — must not fabricate one.
         assert!(!event.metadata.contains_key("permission_mode"));
     }

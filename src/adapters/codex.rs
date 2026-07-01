@@ -326,7 +326,7 @@ fn walk_rollouts_into(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// True for files named `rollout-*.jsonl`.
-fn is_rollout_file(path: &Path) -> bool {
+pub fn is_rollout_file(path: &Path) -> bool {
     let is_jsonl = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
     let named_rollout = path
         .file_name()

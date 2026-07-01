@@ -474,6 +474,49 @@ fn merge_codex_hook(
     true
 }
 
+/// Remove punkgo hook ITEMS from a Codex hooks map at hook-item granularity:
+/// strip only punkgo command objects from each group's `hooks` array, keep a
+/// group that still has (user) hooks, prune only truly-empty groups and empty
+/// event arrays. This never deletes a user's hook that happens to share a group
+/// with a punkgo hook. Returns the number of punkgo hook items removed.
+fn remove_codex_punkgo_hooks(hooks: &mut Map<String, Value>) -> usize {
+    let mut removed = 0usize;
+    let event_keys: Vec<String> = hooks.keys().cloned().collect();
+    for key in &event_keys {
+        let Some(groups) = hooks.get_mut(key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            if let Some(inner) = group.get_mut("hooks").and_then(Value::as_array_mut) {
+                let before = inner.len();
+                inner.retain(|h| {
+                    !h.get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_punkgo_hook)
+                });
+                removed += before - inner.len();
+            }
+        }
+        // Drop groups whose hooks array is now empty (keep groups with user hooks).
+        groups.retain(|g| {
+            g.get("hooks")
+                .and_then(Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+        });
+    }
+    // Drop event keys whose array is now empty.
+    let empty: Vec<String> = hooks
+        .iter()
+        .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for key in &empty {
+        hooks.remove(key);
+    }
+    removed
+}
+
 fn setup_codex() -> Result<()> {
     let exe_path =
         std::env::current_exe().context("failed to determine punkgo-jack executable path")?;
@@ -505,29 +548,27 @@ fn setup_codex() -> Result<()> {
         .context("hooks.json 'hooks' must be a JSON object")?;
 
     let command = format!("{exe_cmd} ingest --source codex --quiet");
+    // Self-heal: strip any stale punkgo hooks first (an old binary path or an
+    // old SessionStart matcher), then add the desired set fresh. This makes
+    // setup converge to the correct hooks instead of skipping whenever any
+    // punkgo hook is already present (coarse-idempotency fix).
+    remove_codex_punkgo_hooks(hooks);
     let mut installed = 0usize;
-    let mut skipped = 0usize;
     for (event, matcher) in codex_hook_events() {
         if merge_codex_hook(hooks, event, matcher, &command) {
             installed += 1;
-        } else {
-            skipped += 1;
         }
     }
 
-    if installed > 0 {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        let content = serde_json::to_string_pretty(&root)
-            .context("failed to serialize codex hooks.json")?;
-        std::fs::write(&path, content.as_bytes())
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        eprintln!("hooks: {installed} installed into {}", path.display());
-    } else {
-        eprintln!("hooks: already installed ({skipped} skipped)");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    let content =
+        serde_json::to_string_pretty(&root).context("failed to serialize codex hooks.json")?;
+    std::fs::write(&path, content.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    eprintln!("hooks: {installed} installed into {}", path.display());
 
     detect_and_save_kerneld();
     try_seed_actor("codex");
@@ -554,33 +595,9 @@ fn unsetup_codex(purge: bool) -> Result<()> {
         .and_then(|obj| obj.get_mut("hooks"))
         .and_then(Value::as_object_mut)
     {
-        let event_keys: Vec<String> = hooks.keys().cloned().collect();
-        for key in &event_keys {
-            let Some(entries) = hooks.get_mut(key).and_then(Value::as_array_mut) else {
-                continue;
-            };
-            entries.retain(|group| {
-                !group
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .map(|arr| {
-                        arr.iter().any(|h| {
-                            h.get("command")
-                                .and_then(Value::as_str)
-                                .is_some_and(is_punkgo_hook)
-                        })
-                    })
-                    .unwrap_or(false)
-            });
-        }
-        let empty: Vec<String> = hooks
-            .iter()
-            .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in &empty {
-            hooks.remove(key);
-        }
+        // Item-level removal: strip only punkgo hooks, never a user's hook that
+        // shares a group with one (data-loss fix).
+        remove_codex_punkgo_hooks(hooks);
     }
 
     let content = serde_json::to_string_pretty(&root).context("failed to serialize hooks.json")?;
@@ -1710,6 +1727,53 @@ mod tests {
         assert_eq!(ss[0]["hooks"][0]["command"], "echo user");
 
         if let Some(v) = prev_codex { std::env::set_var("CODEX_HOME", v); } else { std::env::remove_var("CODEX_HOME"); }
+    }
+
+    #[test]
+    fn unsetup_codex_preserves_user_hook_in_mixed_group() {
+        // Final codex review data-loss fix: a group containing BOTH a user
+        // command and a punkgo command must keep the user command.
+        let mut hooks = Map::new();
+        hooks.insert(
+            "Stop".into(),
+            json!([{
+                "hooks": [
+                    { "type": "command", "command": "echo my-own-hook" },
+                    { "type": "command", "command": "punkgo-jack ingest --source codex --quiet" }
+                ]
+            }]),
+        );
+        let removed = remove_codex_punkgo_hooks(&mut hooks);
+        assert_eq!(removed, 1);
+        let stop = hooks["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1, "group with a surviving user hook must be kept");
+        let inner = stop[0]["hooks"].as_array().unwrap();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0]["command"], "echo my-own-hook");
+
+        // A punkgo-only group is fully pruned.
+        let mut hooks2 = Map::new();
+        hooks2.insert(
+            "Stop".into(),
+            json!([{ "hooks": [{ "type": "command", "command": "punkgo-jack ingest --source codex --quiet" }] }]),
+        );
+        remove_codex_punkgo_hooks(&mut hooks2);
+        assert!(hooks2.get("Stop").is_none(), "punkgo-only event pruned");
+    }
+
+    #[test]
+    fn setup_codex_self_heals_stale_hook() {
+        // Coarse-idempotency fix: a stale punkgo hook (old path/matcher) is
+        // replaced, not skipped.
+        let mut hooks = Map::new();
+        merge_codex_hook(&mut hooks, "Stop", None, "/old/path/punkgo-jack ingest --source codex --quiet");
+        // Simulate setup's self-heal: strip then re-add with the new path.
+        remove_codex_punkgo_hooks(&mut hooks);
+        merge_codex_hook(&mut hooks, "Stop", None, "/new/path/punkgo-jack ingest --source codex --quiet");
+        let stop = hooks["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1);
+        let cmd = stop[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains("/new/path/"), "stale path must be replaced, got {cmd}");
     }
 
     #[test]

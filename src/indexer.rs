@@ -710,7 +710,29 @@ pub fn run_codex_reindex_session(session_id: &str) -> Result<ReindexReport> {
 /// Full-file re-scan (not incremental); incremental offset scan is a future
 /// optimization (see TODOS.md).
 pub fn run_codex_reindex_file(path: PathBuf) -> Result<ReindexReport> {
-    run_codex_reindex_files(vec![path])
+    use crate::adapters::codex;
+    // A hook's `transcript_path` is only semi-trusted. Only scan a real
+    // `rollout-*.jsonl` file that resolves INSIDE the sessions root — reject
+    // paths that escape it or point at an arbitrary local file (a forged or
+    // malformed hook stdin must not make jack ingest/emit receipts for a file
+    // outside $CODEX_HOME/sessions). Failure is warned + skipped, never silent.
+    let root = codex::codex_sessions_root()?;
+    let canon_root = root.canonicalize().unwrap_or(root);
+    let canon = match path.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(path = %path.display(), error = %e, "codex transcript_path unreadable; skipping");
+            return Ok(ReindexReport::default());
+        }
+    };
+    if !canon.starts_with(&canon_root) || !codex::is_rollout_file(&canon) {
+        warn!(
+            path = %canon.display(),
+            "codex transcript_path is not a rollout file under the sessions root; skipping"
+        );
+        return Ok(ReindexReport::default());
+    }
+    run_codex_reindex_files(vec![canon])
 }
 
 /// Resolve the rollout files to scan: all of them, or (for the id fallback)
