@@ -269,6 +269,7 @@ fn run_reindex_codex(opts: &indexer::ReindexOptions) -> Result<()> {
     println!("  sessions upserted: {}", report.sessions_upserted);
     println!("  turns upserted   : {}", report.turns_upserted);
     println!("  parse skipped    : {}   (items dropped on typed-parse failure)", report.parse_skipped);
+    println!("  receipts emitted : {}   (kernel observe per turn; 0 if daemon down)", report.receipts_emitted);
     println!("  duration         : {:.1}s", report.duration_seconds);
     Ok(())
 }

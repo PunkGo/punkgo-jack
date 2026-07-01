@@ -25,9 +25,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use punkgo_core::protocol::{RequestEnvelope, RequestType};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+
+use crate::ipc_client::{new_request_id, IpcClient};
 
 use crate::index::{
     self, now_iso,
@@ -73,6 +76,10 @@ pub struct ReindexReport {
     /// silent data loss is visible in the reindex summary.
     #[serde(default)]
     pub parse_skipped: usize,
+    /// Kernel observe receipts emitted for Codex turns this run (E1/AD4).
+    /// 0 if the daemon was unreachable (turns stay queued for the next drain).
+    #[serde(default)]
+    pub receipts_emitted: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -743,6 +750,12 @@ pub fn run_codex_reindex() -> Result<ReindexReport> {
             let tx = conn.transaction()?;
             let sid = &session_id;
 
+            // E1/AD4 idempotency: preserve any kernel receipt already emitted
+            // for this session's turns across the delete+rewrite, keyed on the
+            // stable turn_uuid (sess:tN). Read BEFORE the delete, re-apply on
+            // write, so re-reindex does not reset kernel_event_id and re-emit.
+            let existing_receipts = existing_kernel_event_ids(&tx, sid)?;
+
             if first_time {
                 // Idempotent re-scan. Both thinking_signatures and turn_content
                 // resolve their rows by joining on `turns`, so BOTH must be
@@ -756,7 +769,8 @@ pub fn run_codex_reindex() -> Result<ReindexReport> {
 
             let mut written = 0usize;
             for (order, turn) in scan_result.turns.iter().enumerate() {
-                if write_normalized_turn(&tx, turn, order as i64, policy, None)? {
+                let kernel_event_id = existing_receipts.get(&turn.turn_uuid).cloned();
+                if write_normalized_turn(&tx, turn, order as i64, policy, kernel_event_id)? {
                     written += 1;
                 }
             }
@@ -803,16 +817,170 @@ pub fn run_codex_reindex() -> Result<ReindexReport> {
             |r| r.get::<_, i64>(0),
         )
         .unwrap_or(0) as usize;
+    drop(conn); // release before the drain opens its own connection
+
+    // E1/AD4: drain the receipt outbox (best-effort). The turns table is the
+    // durable queue (kernel_event_id IS NULL = pending); a daemon-down run
+    // emits nothing and leaves them for the next drain (startup reconcile or
+    // the next reindex). No spillover, so no double-emit; the real event_id is
+    // backfilled when it lands.
+    report.receipts_emitted = match drain_codex_receipts() {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(error = %e, "codex receipt drain failed (non-fatal)");
+            0
+        }
+    };
 
     info!(
         files = report.files_scanned,
         failed = report.files_failed,
         turns = report.turns_upserted,
         sessions = report.sessions_upserted,
+        receipts = report.receipts_emitted,
         duration_s = report.duration_seconds,
         "codex reindex complete"
     );
     Ok(report)
+}
+
+// ---------------------------------------------------------------------------
+// E1 — Codex kernel-receipt outbox (AD4)
+// ---------------------------------------------------------------------------
+
+/// A Codex turn awaiting a kernel receipt.
+struct PendingReceipt {
+    turn_uuid: String,
+    session_id: String,
+    role: String,
+    timestamp: String,
+    model: Option<String>,
+    content_blob_hash: Option<String>,
+}
+
+/// Map of `turn_uuid -> kernel_event_id` for a session's turns that already
+/// carry a receipt. Used to preserve receipts across a reindex delete+rewrite.
+fn existing_kernel_event_ids(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<HashMap<String, String>> {
+    let mut stmt = conn.prepare(
+        "SELECT turn_uuid, kernel_event_id FROM turns \
+         WHERE session_id = ?1 AND kernel_event_id IS NOT NULL",
+    )?;
+    let map = stmt
+        .query_map(params![session_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(map)
+}
+
+/// Codex turns still needing a kernel receipt (`kernel_event_id IS NULL`),
+/// ordered deterministically. This is the outbox queue.
+fn collect_pending_codex_receipts(conn: &Connection) -> Result<Vec<PendingReceipt>> {
+    let mut stmt = conn.prepare(
+        "SELECT turn_uuid, session_id, role, timestamp, model, content_blob_hash \
+         FROM turns WHERE source = 'codex' AND kernel_event_id IS NULL \
+         ORDER BY session_id, turn_order",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(PendingReceipt {
+                turn_uuid: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                timestamp: r.get(3)?,
+                model: r.get(4)?,
+                content_blob_hash: r.get(5)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+/// Build the kernel `observe` submit payload for a Codex turn receipt. Metadata
+/// only — the body lives in the blob store, referenced by `content_blob_hash`.
+fn build_codex_receipt_payload(r: &PendingReceipt) -> serde_json::Value {
+    serde_json::json!({
+        "actor_id": "codex",
+        "action_type": "observe",
+        "target": format!("codex/turn/{}", r.turn_uuid),
+        "payload": {
+            "schema": "punkgo-jack-codex-turn-v1",
+            "session_id": r.session_id,
+            "role": r.role,
+            "model": r.model,
+            "timestamp": r.timestamp,
+            "content_blob_hash": r.content_blob_hash,
+            "source": "codex"
+        }
+    })
+}
+
+/// Record the kernel event id on a turn once its receipt has committed.
+fn backfill_kernel_event_id(conn: &Connection, turn_uuid: &str, event_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE turns SET kernel_event_id = ?1 WHERE turn_uuid = ?2",
+        params![event_id, turn_uuid],
+    )
+    .context("backfill_kernel_event_id")?;
+    Ok(())
+}
+
+/// Drain the Codex receipt outbox: emit a kernel `observe` for every Codex turn
+/// lacking one, backfilling `kernel_event_id` on success. Best-effort and
+/// idempotent (turns already carrying a receipt are never re-selected).
+///
+/// AD4 says "failure → spillover", but the turns table is a strictly better
+/// outbox here: it lets the drain retry and backfill the *real* event id,
+/// whereas a spillover replay could neither dedup against already-emitted turns
+/// nor backfill the id — risking a double receipt (violating AD5's one-turn-
+/// one-event). So on daemon-unreachable we simply leave turns pending and stop;
+/// the next drain (startup reconcile or reindex) retries. Returns the count
+/// emitted this call.
+pub fn drain_codex_receipts() -> Result<usize> {
+    let conn = index::open_jack_db()?;
+    let pending = collect_pending_codex_receipts(&conn)?;
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    let client = IpcClient::from_env(None);
+    let mut emitted = 0usize;
+    for r in &pending {
+        let req = RequestEnvelope {
+            request_id: new_request_id(),
+            request_type: RequestType::Submit,
+            payload: build_codex_receipt_payload(r),
+        };
+        match client.send(&req) {
+            Ok(resp) if resp.status == "ok" => {
+                if let Some(eid) = resp.payload.get("event_id").and_then(|v| v.as_str()) {
+                    backfill_kernel_event_id(&conn, &r.turn_uuid, eid)?;
+                    emitted += 1;
+                }
+            }
+            Ok(_) => {
+                // Kernel rejected this one (e.g. low energy). Leave it pending
+                // and try the rest — a transient per-event issue should not
+                // stall the whole queue.
+                continue;
+            }
+            Err(_) => {
+                // Daemon unreachable: stop, leave the remainder pending.
+                debug!(
+                    emitted,
+                    remaining = pending.len() - emitted,
+                    "codex receipt drain: daemon unreachable, stopping"
+                );
+                break;
+            }
+        }
+    }
+    Ok(emitted)
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +1040,13 @@ pub fn reconcile_on_startup() -> Result<()> {
     let drained = drain_pending_scans().unwrap_or(0);
     if drained > 0 {
         info!(drained, "reconcile: drained pending scans on startup");
+    }
+
+    // E1/AD4: drain any Codex receipt outbox left pending from a prior
+    // daemon-down reindex. Best-effort; the daemon is up here by definition.
+    let receipts = drain_codex_receipts().unwrap_or(0);
+    if receipts > 0 {
+        info!(receipts, "reconcile: codex receipts drained on startup");
     }
     Ok(())
 }
@@ -1834,6 +2009,125 @@ mod tests {
             )
             .unwrap();
         assert!(crate::blob::resolve(&hash).unwrap().is_some());
+    }
+
+    /// E1/AD4: a kernel receipt already recorded on a Codex turn survives a
+    /// reindex delete+rewrite (keyed on the stable turn_uuid), so re-reindex
+    /// does not reset kernel_event_id and re-emit — the idempotency guarantee.
+    #[test]
+    fn codex_receipt_preserved_across_reindex() {
+        let _guard = DataDirGuard::new();
+        // Point the daemon endpoint at a dead socket so the receipt drain
+        // fails fast and deterministically (no real kernel side effects).
+        let prev_ep = std::env::var_os("PUNKGO_DAEMON_ENDPOINT");
+        std::env::set_var("PUNKGO_DAEMON_ENDPOINT", "/nonexistent/punkgo-test.sock");
+
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let day = codex_home.path().join("sessions").join("2026").join("01").join("01");
+        std::fs::create_dir_all(&day).unwrap();
+        let rollout = day.join("rollout-2026-01-01T00-00-00-uuid.jsonl");
+        let lines = [
+            serde_json::json!({"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"sess-rcpt","cwd":"/w"}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}),
+            serde_json::json!({"timestamp":"t","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"yo"}]}}),
+        ];
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&rollout).unwrap();
+            for l in &lines {
+                writeln!(f, "{l}").unwrap();
+            }
+            f.flush().unwrap();
+        }
+
+        let prev_codex = std::env::var_os("CODEX_HOME");
+        std::env::set_var("CODEX_HOME", codex_home.path());
+
+        // First reindex — daemon dead, so no receipts emitted (all NULL).
+        let r1 = run_codex_reindex().unwrap();
+        assert_eq!(r1.receipts_emitted, 0, "dead daemon emits nothing");
+
+        // Simulate a receipt having been recorded on the user turn.
+        {
+            let conn = index::open_jack_db().unwrap();
+            let n = conn
+                .execute(
+                    "UPDATE turns SET kernel_event_id = 'evt-preserved' WHERE turn_uuid = 'sess-rcpt:t0'",
+                    [],
+                )
+                .unwrap();
+            assert_eq!(n, 1, "expected to tag the user turn");
+        }
+
+        // Second reindex deletes+rewrites the session.
+        run_codex_reindex().unwrap();
+
+        // Restore env.
+        if let Some(v) = prev_codex { std::env::set_var("CODEX_HOME", v); } else { std::env::remove_var("CODEX_HOME"); }
+        if let Some(v) = prev_ep { std::env::set_var("PUNKGO_DAEMON_ENDPOINT", v); } else { std::env::remove_var("PUNKGO_DAEMON_ENDPOINT"); }
+
+        // The receipt must have survived the rewrite.
+        let conn = index::open_jack_db().unwrap();
+        let keid: Option<String> = conn
+            .query_row(
+                "SELECT kernel_event_id FROM turns WHERE turn_uuid = 'sess-rcpt:t0'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            keid.as_deref(),
+            Some("evt-preserved"),
+            "kernel_event_id must be preserved across reindex (E1 idempotency)"
+        );
+    }
+
+    /// E1/AD4: the receipt outbox selects only turns lacking a receipt, the
+    /// payload has the expected shape, and backfill records the event id.
+    #[test]
+    fn codex_receipt_outbox_collect_build_backfill() {
+        use crate::index::turns::{upsert_turn, TurnRow};
+        let _guard = DataDirGuard::new();
+        let conn = index::open_jack_db().unwrap();
+
+        let mk = |uuid: &str, keid: Option<&str>| TurnRow {
+            turn_uuid: uuid.into(),
+            session_id: "s".into(),
+            role: "assistant".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            content_blocks_meta: "[]".into(),
+            scanned_at: "2026-01-01T00:00:00Z".into(),
+            source: Some("codex".into()),
+            content_blob_hash: Some("sha256:abc".into()),
+            model: Some("gpt-5.2-codex".into()),
+            kernel_event_id: keid.map(String::from),
+            ..Default::default()
+        };
+        upsert_turn(&conn, &mk("s:t0", None)).unwrap();
+        upsert_turn(&conn, &mk("s:t1", Some("evt-existing"))).unwrap();
+        upsert_turn(&conn, &mk("s:t2", None)).unwrap();
+
+        // Only the two NULL turns are pending.
+        let pending = collect_pending_codex_receipts(&conn).unwrap();
+        let ids: Vec<_> = pending.iter().map(|p| p.turn_uuid.clone()).collect();
+        assert_eq!(ids, vec!["s:t0", "s:t2"]);
+
+        // Payload shape.
+        let payload = build_codex_receipt_payload(&pending[0]);
+        assert_eq!(payload["actor_id"], "codex");
+        assert_eq!(payload["action_type"], "observe");
+        assert_eq!(payload["target"], "codex/turn/s:t0");
+        assert_eq!(payload["payload"]["schema"], "punkgo-jack-codex-turn-v1");
+        assert_eq!(payload["payload"]["content_blob_hash"], "sha256:abc");
+
+        // Backfill removes it from the pending set.
+        backfill_kernel_event_id(&conn, "s:t0", "evt-new").unwrap();
+        let after: Vec<_> = collect_pending_codex_receipts(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.turn_uuid)
+            .collect();
+        assert_eq!(after, vec!["s:t2"]);
     }
 
     #[test]
