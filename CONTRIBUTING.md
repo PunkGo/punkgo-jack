@@ -33,8 +33,9 @@ Feature flags:
 
 ```bash
 cargo test --all-features        # includes rebuild-audit (requires SQLite)
-cargo test --no-default-features  # without roast-png (no resvg/tiny-skia)
 ```
+
+(`default` is empty as of v0.7.0; `rebuild-audit` is the only optional feature.)
 
 ## Runtime Mode
 
@@ -51,5 +52,6 @@ cargo test --no-default-features  # without roast-png (no resvg/tiny-skia)
 ## Near-Term Priorities
 
 - `read_events` pagination/cursor integration (kernel-level limitation, scan_limit max 100)
-- Windsurf hook adapter (Cursor adapter completed in v0.4.1)
-- **Roast** (`punkgo-jack roast`) — AI personality diagnosis based on recorded events. Analyzes coding patterns and maps them to one of 16 MBTI-inspired dog personalities. Config-driven via TOML. Code lives in `src/roast/`.
+- Windsurf hook adapter (Cursor adapter completed in v0.4.1, Codex CLI in v0.7.0)
+- See `TODOS.md` for deferred work (incremental Codex rollout scan, redacting the
+  Claude Code blob externalization path, exactly-once kernel receipts)
