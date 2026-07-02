@@ -10,7 +10,10 @@ rust-version = "1.88"
 readme = "README.md"
 keywords = ["ai", "audit", "merkle", "agent", "accountability"]
 categories = ["command-line-utilities", "development-tools", "cryptography"]
-include = ["src/**/*", "assets/**/*", "Cargo.toml", "README.md", "LICENSE", "CHANGELOG.md"]
+# NOTE: unanchored names here use gitignore semantics and match at ANY depth
+# ("README.md" would also package campaigns/README.md, examples/**/README.md).
+# Root files must stay anchored with a leading slash.
+include = ["src/**/*", "assets/**/*", "/Cargo.toml", "/README.md", "/LICENSE", "/CHANGELOG.md"]
 
 [features]
 default = []
