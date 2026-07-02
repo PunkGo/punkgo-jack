@@ -74,9 +74,8 @@ fn row_to_content(row: &rusqlite::Row<'_>) -> rusqlite::Result<TurnContentRow> {
 
 /// List a turn's content blocks in `block_index` order.
 pub fn list_content_for_turn(conn: &Connection, turn_uuid: &str) -> Result<Vec<TurnContentRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM turn_content WHERE turn_uuid = ?1 ORDER BY block_index ASC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT * FROM turn_content WHERE turn_uuid = ?1 ORDER BY block_index ASC")?;
     let rows = stmt
         .query_map(params![turn_uuid], row_to_content)?
         .map(|r| r.map_err(anyhow::Error::from))
@@ -147,7 +146,10 @@ mod tests {
         let listed = list_content_for_turn(&conn, "t1").unwrap();
         let kinds: Vec<_> = listed.iter().map(|b| b.kind.clone()).collect();
         assert_eq!(kinds, vec!["input_text", "reasoning", "output_text"]);
-        assert_eq!(listed[0].content_hash.as_deref(), Some("sha256:input_text0"));
+        assert_eq!(
+            listed[0].content_hash.as_deref(),
+            Some("sha256:input_text0")
+        );
     }
 
     #[test]

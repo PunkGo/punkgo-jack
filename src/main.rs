@@ -220,7 +220,9 @@ fn run_reindex(args: &mut impl Iterator<Item = String>) -> Result<()> {
     match opts.source.as_deref() {
         Some("codex") => return run_reindex_codex(&opts),
         Some("claude-code") | None => {}
-        Some(other) => anyhow::bail!("unknown reindex source: {other} (expected claude-code, codex)"),
+        Some(other) => {
+            anyhow::bail!("unknown reindex source: {other} (expected claude-code, codex)")
+        }
     }
 
     if !opts.full && opts.since.is_none() && opts.session.is_none() {
@@ -269,8 +271,14 @@ fn run_reindex_codex(opts: &indexer::ReindexOptions) -> Result<()> {
     println!("  files failed     : {}", report.files_failed);
     println!("  sessions upserted: {}", report.sessions_upserted);
     println!("  turns upserted   : {}", report.turns_upserted);
-    println!("  parse skipped    : {}   (items dropped on typed-parse failure)", report.parse_skipped);
-    println!("  receipts emitted : {}   (kernel observe per turn; 0 if daemon down)", report.receipts_emitted);
+    println!(
+        "  parse skipped    : {}   (items dropped on typed-parse failure)",
+        report.parse_skipped
+    );
+    println!(
+        "  receipts emitted : {}   (kernel observe per turn; 0 if daemon down)",
+        report.receipts_emitted
+    );
     println!("  duration         : {:.1}s", report.duration_seconds);
     Ok(())
 }
@@ -279,34 +287,57 @@ fn print_codex_dry_run_report(report: &adapters::codex::CodexDryRunReport) {
     println!("codex dry-run complete:");
     println!("  files scanned     : {}", report.files_scanned);
     println!("  files failed      : {}", report.files_failed);
-    println!("  files truncated   : {}   (mid-file I/O error, remainder unread)", report.files_truncated);
+    println!(
+        "  files truncated   : {}   (mid-file I/O error, remainder unread)",
+        report.files_truncated
+    );
     println!("  lines total       : {}", report.lines_total);
     println!("  lines blank       : {}", report.lines_blank);
     println!(
         "  hard parse errors : {}   (acceptance: 0)",
         report.hard_parse_errors
     );
-    println!("  unknown items     : {}   (unmodeled response_item shapes)", report.unknown_response_items);
+    println!(
+        "  unknown items     : {}   (unmodeled response_item shapes)",
+        report.unknown_response_items
+    );
 
     print_count_map("envelope types", &report.envelope_type_counts);
     print_count_map("response_item shapes", &report.response_item_type_counts);
     if !report.typed_parse_warnings.is_empty() {
-        print_count_map("TYPED PARSE WARNINGS (modeled shape drifted)", &report.typed_parse_warnings);
+        print_count_map(
+            "TYPED PARSE WARNINGS (modeled shape drifted)",
+            &report.typed_parse_warnings,
+        );
     }
     print_count_map("message roles", &report.message_role_counts);
     print_count_map("message content parts", &report.message_content_type_counts);
 
-    println!("  reasoning         : {} total, {} encrypted, {} with summary",
-        report.reasoning_total, report.reasoning_with_encrypted, report.reasoning_with_summary);
+    println!(
+        "  reasoning         : {} total, {} encrypted, {} with summary",
+        report.reasoning_total, report.reasoning_with_encrypted, report.reasoning_with_summary
+    );
 
     println!("  --- call_id linkage (join key = call_id) ---");
     println!("  tool calls        : {}", report.tool_calls);
     println!("  tool outputs      : {}", report.tool_outputs);
     println!("  matched           : {}", report.calls_matched);
-    println!("  orphan calls      : {}   (call, no output in file)", report.orphan_calls);
-    println!("  orphan outputs    : {}   (output, no call in file)", report.orphan_outputs);
-    println!("  calls with fc_ id : {}   (informational; not a linkage key)", report.calls_with_fc_id);
-    println!("  non-string outputs: {}   (output was array/object)", report.outputs_non_string);
+    println!(
+        "  orphan calls      : {}   (call, no output in file)",
+        report.orphan_calls
+    );
+    println!(
+        "  orphan outputs    : {}   (output, no call in file)",
+        report.orphan_outputs
+    );
+    println!(
+        "  calls with fc_ id : {}   (informational; not a linkage key)",
+        report.calls_with_fc_id
+    );
+    println!(
+        "  non-string outputs: {}   (output was array/object)",
+        report.outputs_non_string
+    );
 
     println!("  --- AD3 turn-granularity evidence ---");
     println!("  user-message turns: {}", report.user_message_turns);

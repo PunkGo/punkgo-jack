@@ -821,7 +821,11 @@ fn run_codex_reindex_files(files: Vec<PathBuf>) -> Result<ReindexReport> {
                 turns::delete_turns_for_session(&tx, sid)?;
             }
 
-            write_session(&tx, &scan_result.session, Some(path.to_string_lossy().as_ref()))?;
+            write_session(
+                &tx,
+                &scan_result.session,
+                Some(path.to_string_lossy().as_ref()),
+            )?;
 
             let mut written = 0usize;
             for (order, turn) in scan_result.turns.iter().enumerate() {
@@ -852,7 +856,10 @@ fn run_codex_reindex_files(files: Vec<PathBuf>) -> Result<ReindexReport> {
         }
 
         if (i + 1) % 50 == 0 {
-            info!(progress = format!("{}/{}", i + 1, total), "codex reindex progress");
+            info!(
+                progress = format!("{}/{}", i + 1, total),
+                "codex reindex progress"
+            );
         }
     }
 
@@ -2055,7 +2062,10 @@ mod tests {
         let tc: i64 = conn
             .query_row("SELECT COUNT(*) FROM turn_content", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(tc, 5, "turn_content must not grow across re-runs (idempotent)");
+        assert_eq!(
+            tc, 5,
+            "turn_content must not grow across re-runs (idempotent)"
+        );
 
         // Source tagged; content_blob_hash set on the assistant turn.
         let codex_turns: i64 = conn
@@ -2098,7 +2108,12 @@ mod tests {
         std::env::set_var("PUNKGO_DAEMON_ENDPOINT", "/nonexistent/punkgo-test.sock");
 
         let codex_home = tempfile::TempDir::new().unwrap();
-        let day = codex_home.path().join("sessions").join("2026").join("01").join("01");
+        let day = codex_home
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("01")
+            .join("01");
         std::fs::create_dir_all(&day).unwrap();
         let rollout = day.join("rollout-2026-01-01T00-00-00-uuid.jsonl");
         let lines = [
@@ -2138,8 +2153,16 @@ mod tests {
         run_codex_reindex().unwrap();
 
         // Restore env.
-        if let Some(v) = prev_codex { std::env::set_var("CODEX_HOME", v); } else { std::env::remove_var("CODEX_HOME"); }
-        if let Some(v) = prev_ep { std::env::set_var("PUNKGO_DAEMON_ENDPOINT", v); } else { std::env::remove_var("PUNKGO_DAEMON_ENDPOINT"); }
+        if let Some(v) = prev_codex {
+            std::env::set_var("CODEX_HOME", v);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        if let Some(v) = prev_ep {
+            std::env::set_var("PUNKGO_DAEMON_ENDPOINT", v);
+        } else {
+            std::env::remove_var("PUNKGO_DAEMON_ENDPOINT");
+        }
 
         // The receipt must have survived the rewrite.
         let conn = index::open_jack_db().unwrap();

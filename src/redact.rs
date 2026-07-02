@@ -29,7 +29,14 @@ const MIN_ENV_SECRET_LEN: usize = 8;
 
 /// Environment variable name fragments that mark a value as sensitive.
 const SECRET_ENV_MARKERS: &[&str] = &[
-    "KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTH", "APIKEY",
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "AUTH",
+    "APIKEY",
 ];
 
 /// (regex, kind) pairs for known secret shapes. Compiled once.
@@ -83,7 +90,9 @@ static TOKEN_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
         // spaces (Codex tool args/results are JSON-shaped, a common leak path).
         // Group 1 = key, group 2 = quoted value (spaces allowed).
         (
-            p(r#"(?i)"([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)"\s*:\s*"([^"]{1,})""#),
+            p(
+                r#"(?i)"([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)"\s*:\s*"([^"]{1,})""#,
+            ),
             "json-assignment",
         ),
         // KEY=value / KEY: value where KEY looks sensitive. The value (an
@@ -91,7 +100,9 @@ static TOKEN_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
         // preserved so the shape stays legible. Length gating happens in
         // `secret_assignment_value_should_redact`.
         (
-            p(r#"(?i)([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)\s*[:=]\s*["']?([^\s"']{1,})["']?"#),
+            p(
+                r#"(?i)([A-Za-z0-9_]*(?:key|token|secret|password|passwd|credential|auth)[A-Za-z0-9_]*)\s*[:=]\s*["']?([^\s"']{1,})["']?"#,
+            ),
             "assignment",
         ),
     ]
@@ -289,7 +300,12 @@ mod tests {
     fn spares_nonsecret_sensitive_keys() {
         let r = Redactor::with_env_values(vec![]);
         // Sensitive-looking key names with ordinary short values: NOT secrets.
-        for c in ["pubkey: 0xAbC", "token: ERC20", "key: value", "authToken: refresh"] {
+        for c in [
+            "pubkey: 0xAbC",
+            "token: ERC20",
+            "key: value",
+            "authToken: refresh",
+        ] {
             let (out, hits) = r.redact(c);
             assert_eq!(hits, 0, "false-positive redaction on: {c} -> {out}");
             assert_eq!(out, c);
@@ -313,10 +329,14 @@ mod tests {
     #[test]
     fn redacts_connection_string_password() {
         let r = Redactor::with_env_values(vec![]);
-        let (out, hits) = r.redact("DATABASE_URL=postgres://appuser:Tr0ub4dor3@db.internal:5432/prod");
+        let (out, hits) =
+            r.redact("DATABASE_URL=postgres://appuser:Tr0ub4dor3@db.internal:5432/prod");
         assert!(hits >= 1);
         assert!(!out.contains("Tr0ub4dor3"), "db password leaked: {out}");
-        assert!(out.contains("postgres://appuser:"), "shape not preserved: {out}");
+        assert!(
+            out.contains("postgres://appuser:"),
+            "shape not preserved: {out}"
+        );
         assert!(out.contains("@db.internal"), "host stripped: {out}");
     }
 
@@ -324,12 +344,19 @@ mod tests {
     fn redacts_bearer_and_basic_tokens() {
         let r = Redactor::with_env_values(vec![]);
         // Opaque bearer token matching no provider shape.
-        let (out, _) = r.redact("curl -H \"Authorization: Bearer 4f9e8d7c6b5a49392817065f4e3d2c1b\"");
-        assert!(!out.contains("4f9e8d7c6b5a49392817065f4e3d2c1b"), "bearer token leaked: {out}");
+        let (out, _) =
+            r.redact("curl -H \"Authorization: Bearer 4f9e8d7c6b5a49392817065f4e3d2c1b\"");
+        assert!(
+            !out.contains("4f9e8d7c6b5a49392817065f4e3d2c1b"),
+            "bearer token leaked: {out}"
+        );
         assert!(out.contains("Bearer [REDACTED:bearer]"), "got: {out}");
 
         let (out2, _) = r.redact("Authorization: Basic dXNlcjpwYXNzd29yZA==");
-        assert!(!out2.contains("dXNlcjpwYXNzd29yZA=="), "basic cred leaked: {out2}");
+        assert!(
+            !out2.contains("dXNlcjpwYXNzd29yZA=="),
+            "basic cred leaked: {out2}"
+        );
     }
 
     #[test]
@@ -339,7 +366,10 @@ mod tests {
         // password-named key is high-precision.
         let (out, hits) = r.redact("password: SuperSecretPassphrase");
         assert_eq!(hits, 1);
-        assert!(!out.contains("SuperSecretPassphrase"), "password leaked: {out}");
+        assert!(
+            !out.contains("SuperSecretPassphrase"),
+            "password leaked: {out}"
+        );
         assert!(out.contains("password=[REDACTED:secret]"), "got: {out}");
     }
 
@@ -366,10 +396,15 @@ mod tests {
         // Final codex review: JSON-shaped tool args/results (common in Codex
         // rollouts) with quoted keys + spaced values slipped the unquoted regex.
         let r = Redactor::with_env_values(vec![]);
-        let (out, _) =
-            r.redact(r#"{"db_password": "correct horse battery staple", "port": 5432}"#);
-        assert!(!out.contains("correct horse battery staple"), "json secret leaked: {out}");
-        assert!(out.contains(r#""db_password": "[REDACTED:secret]""#), "got: {out}");
+        let (out, _) = r.redact(r#"{"db_password": "correct horse battery staple", "port": 5432}"#);
+        assert!(
+            !out.contains("correct horse battery staple"),
+            "json secret leaked: {out}"
+        );
+        assert!(
+            out.contains(r#""db_password": "[REDACTED:secret]""#),
+            "got: {out}"
+        );
         assert!(out.contains("\"port\": 5432"), "non-secret field survived");
 
         // Ambiguous key with a short value is spared (avoid over-redaction).
@@ -378,7 +413,10 @@ mod tests {
 
         // Unambiguous key redacts even a short quoted value.
         let (out3, _) = r.redact(r#"{"client_secret": "x9"}"#);
-        assert!(!out3.contains("\"x9\""), "unambiguous short secret leaked: {out3}");
+        assert!(
+            !out3.contains("\"x9\""),
+            "unambiguous short secret leaked: {out3}"
+        );
     }
 
     #[test]

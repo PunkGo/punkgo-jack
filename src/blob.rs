@@ -278,14 +278,24 @@ mod tests {
 
         let hash_ref = store("codex tool output body").unwrap();
         assert!(hash_ref.starts_with("sha256:"));
-        assert_eq!(load(&hash_ref).unwrap().as_deref(), Some("codex tool output body"));
+        assert_eq!(
+            load(&hash_ref).unwrap().as_deref(),
+            Some("codex tool output body")
+        );
         // Bare-hex form also resolves.
         let bare = hash_ref.strip_prefix("sha256:").unwrap();
-        assert_eq!(load(bare).unwrap().as_deref(), Some("codex tool output body"));
+        assert_eq!(
+            load(bare).unwrap().as_deref(),
+            Some("codex tool output body")
+        );
         // Unknown hash → None, not an error.
         assert!(load("sha256:deadbeef").unwrap().is_none());
 
-        if let Some(v) = prev { std::env::set_var("PUNKGO_DATA_DIR", v); } else { std::env::remove_var("PUNKGO_DATA_DIR"); }
+        if let Some(v) = prev {
+            std::env::set_var("PUNKGO_DATA_DIR", v);
+        } else {
+            std::env::remove_var("PUNKGO_DATA_DIR");
+        }
     }
 
     /// Integration test that uses filesystem — run with PUNKGO_DATA_DIR set to temp.

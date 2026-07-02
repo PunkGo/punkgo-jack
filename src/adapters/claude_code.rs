@@ -771,7 +771,13 @@ fn build_session_metadata(raw: &Value) -> BTreeMap<String, Value> {
 /// (e.g. MessageDisplay has no `permission_mode`) are unaffected. No new hook
 /// is required — these are already in the existing hook payloads.
 fn enrich_decision_metadata(raw: &Value, meta: &mut BTreeMap<String, Value>) {
-    for key in ["prompt_id", "permission_mode", "agent_id", "agent_type", "effort"] {
+    for key in [
+        "prompt_id",
+        "permission_mode",
+        "agent_id",
+        "agent_type",
+        "effort",
+    ] {
         if let Some(v) = raw.get(key) {
             meta.insert(key.into(), v.clone());
         }
@@ -1483,10 +1489,16 @@ mod tests {
         assert_eq!(event.event_type, "permission_request");
         assert_eq!(event.target, "permission_request:Bash");
         // Enrichment via build_metadata.
-        assert_eq!(event.metadata.get("permission_mode"), Some(&json!("default")));
+        assert_eq!(
+            event.metadata.get("permission_mode"),
+            Some(&json!("default"))
+        );
         assert_eq!(event.metadata.get("prompt_id"), Some(&json!("prm_1")));
         assert_eq!(event.metadata.get("agent_id"), Some(&json!("agent_9")));
-        assert_eq!(event.metadata.get("agent_type"), Some(&json!("code-reviewer")));
+        assert_eq!(
+            event.metadata.get("agent_type"),
+            Some(&json!("code-reviewer"))
+        );
         assert_eq!(event.metadata.get("effort"), Some(&json!("high")));
     }
 
@@ -1513,9 +1525,15 @@ mod tests {
         assert_eq!(r.event_type, "elicitation_result");
         assert_eq!(r.target, "elicitation_result:svelte_mcp");
         // Metadata-only: size recorded, body NEVER stored (may hold a secret).
-        assert_eq!(r.metadata.get("response_byte_len"), Some(&json!("yes, use the dark theme".len())));
+        assert_eq!(
+            r.metadata.get("response_byte_len"),
+            Some(&json!("yes, use the dark theme".len()))
+        );
         let serialized = serde_json::to_string(&r.metadata).unwrap();
-        assert!(!serialized.contains("dark theme"), "elicitation body leaked: {serialized}");
+        assert!(
+            !serialized.contains("dark theme"),
+            "elicitation body leaked: {serialized}"
+        );
     }
 
     #[test]
@@ -1532,9 +1550,15 @@ mod tests {
         assert_eq!(event.target, "message:display");
         // Metadata-only: size recorded, body and preview NEVER stored.
         assert_eq!(event.content, "Message displayed");
-        assert_eq!(event.metadata.get("message_byte_len"), Some(&json!("Here is the plan.".len())));
+        assert_eq!(
+            event.metadata.get("message_byte_len"),
+            Some(&json!("Here is the plan.".len()))
+        );
         let serialized = serde_json::to_string(&event.metadata).unwrap();
-        assert!(!serialized.contains("Here is the plan"), "message body leaked: {serialized}");
+        assert!(
+            !serialized.contains("Here is the plan"),
+            "message body leaked: {serialized}"
+        );
         // MessageDisplay has no permission_mode (per docs) — must not fabricate one.
         assert!(!event.metadata.contains_key("permission_mode"));
     }
@@ -1552,7 +1576,10 @@ mod tests {
         let e = adapter.transform(&tool).unwrap();
         assert_eq!(e.metadata.get("effort"), Some(&json!("medium")));
         assert_eq!(e.metadata.get("prompt_id"), Some(&json!("p1")));
-        assert_eq!(e.metadata.get("permission_mode"), Some(&json!("acceptEdits")));
+        assert_eq!(
+            e.metadata.get("permission_mode"),
+            Some(&json!("acceptEdits"))
+        );
 
         // SessionStart captures model.
         let ss = json!({

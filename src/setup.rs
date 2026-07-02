@@ -1667,7 +1667,12 @@ mod tests {
         let cmd = "punkgo-jack ingest --source codex --quiet";
 
         // SessionStart with a matcher.
-        assert!(merge_codex_hook(&mut hooks, "SessionStart", Some("startup|resume"), cmd));
+        assert!(merge_codex_hook(
+            &mut hooks,
+            "SessionStart",
+            Some("startup|resume"),
+            cmd
+        ));
         let ss = hooks["SessionStart"].as_array().unwrap();
         assert_eq!(ss.len(), 1);
         assert_eq!(ss[0]["matcher"], "startup|resume");
@@ -1682,7 +1687,12 @@ mod tests {
         assert!(stop[0].get("matcher").is_none(), "Stop must omit matcher");
 
         // Idempotent: re-merge is a no-op.
-        assert!(!merge_codex_hook(&mut hooks, "SessionStart", Some("startup|resume"), cmd));
+        assert!(!merge_codex_hook(
+            &mut hooks,
+            "SessionStart",
+            Some("startup|resume"),
+            cmd
+        ));
         assert_eq!(hooks["SessionStart"].as_array().unwrap().len(), 1);
     }
 
@@ -1716,7 +1726,12 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
         let hooks = root["hooks"].as_object_mut().unwrap();
         for (event, matcher) in codex_hook_events() {
-            merge_codex_hook(hooks, event, matcher, "punkgo-jack ingest --source codex --quiet");
+            merge_codex_hook(
+                hooks,
+                event,
+                matcher,
+                "punkgo-jack ingest --source codex --quiet",
+            );
         }
         std::fs::write(&hooks_path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
 
@@ -1731,12 +1746,19 @@ mod tests {
         let cleaned: Value =
             serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
         // Punkgo Stop group gone (Stop key pruned); user SessionStart survives.
-        assert!(cleaned["hooks"].get("Stop").is_none(), "punkgo Stop must be removed");
+        assert!(
+            cleaned["hooks"].get("Stop").is_none(),
+            "punkgo Stop must be removed"
+        );
         let ss = cleaned["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(ss.len(), 1, "user SessionStart hook must survive");
         assert_eq!(ss[0]["hooks"][0]["command"], "echo user");
 
-        if let Some(v) = prev_codex { std::env::set_var("CODEX_HOME", v); } else { std::env::remove_var("CODEX_HOME"); }
+        if let Some(v) = prev_codex {
+            std::env::set_var("CODEX_HOME", v);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
     }
 
     #[test]
@@ -1756,7 +1778,11 @@ mod tests {
         let removed = remove_codex_punkgo_hooks(&mut hooks);
         assert_eq!(removed, 1);
         let stop = hooks["Stop"].as_array().unwrap();
-        assert_eq!(stop.len(), 1, "group with a surviving user hook must be kept");
+        assert_eq!(
+            stop.len(),
+            1,
+            "group with a surviving user hook must be kept"
+        );
         let inner = stop[0]["hooks"].as_array().unwrap();
         assert_eq!(inner.len(), 1);
         assert_eq!(inner[0]["command"], "echo my-own-hook");
@@ -1776,14 +1802,27 @@ mod tests {
         // Coarse-idempotency fix: a stale punkgo hook (old path/matcher) is
         // replaced, not skipped.
         let mut hooks = Map::new();
-        merge_codex_hook(&mut hooks, "Stop", None, "/old/path/punkgo-jack ingest --source codex --quiet");
+        merge_codex_hook(
+            &mut hooks,
+            "Stop",
+            None,
+            "/old/path/punkgo-jack ingest --source codex --quiet",
+        );
         // Simulate setup's self-heal: strip then re-add with the new path.
         remove_codex_punkgo_hooks(&mut hooks);
-        merge_codex_hook(&mut hooks, "Stop", None, "/new/path/punkgo-jack ingest --source codex --quiet");
+        merge_codex_hook(
+            &mut hooks,
+            "Stop",
+            None,
+            "/new/path/punkgo-jack ingest --source codex --quiet",
+        );
         let stop = hooks["Stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
         let cmd = stop[0]["hooks"][0]["command"].as_str().unwrap();
-        assert!(cmd.contains("/new/path/"), "stale path must be replaced, got {cmd}");
+        assert!(
+            cmd.contains("/new/path/"),
+            "stale path must be replaced, got {cmd}"
+        );
     }
 
     #[test]

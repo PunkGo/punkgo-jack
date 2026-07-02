@@ -277,7 +277,12 @@ pub fn write_normalized_turn(
     // to the blob store so `content_blob_hash` is a RESOLVABLE reference (not a
     // dangling digest). Resolving it yields the newline-joined block hashes.
     let content_blob_hash = if policy == CapturePolicy::Full {
-        let joined: String = block_hashes.iter().flatten().cloned().collect::<Vec<_>>().join("\n");
+        let joined: String = block_hashes
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         if joined.is_empty() {
             None
         } else {
@@ -402,13 +407,33 @@ mod tests {
         // Build a CC-style block set with content=None (as the CC scanner
         // produces) and assert the meta JSON key sets match the legacy shape.
         let blocks = vec![
-            NormalizedBlock { kind: "text".into(), byte_len: 10, ..Default::default() },
-            NormalizedBlock { kind: "tool_use".into(), tool_name: Some("Bash".into()), byte_len: 5, ..Default::default() },
-            NormalizedBlock { kind: "tool_result".into(), is_error: true, byte_len: 3, ..Default::default() },
-            NormalizedBlock { kind: "thinking".into(), signature_present: true, byte_len: 0, ..Default::default() },
+            NormalizedBlock {
+                kind: "text".into(),
+                byte_len: 10,
+                ..Default::default()
+            },
+            NormalizedBlock {
+                kind: "tool_use".into(),
+                tool_name: Some("Bash".into()),
+                byte_len: 5,
+                ..Default::default()
+            },
+            NormalizedBlock {
+                kind: "tool_result".into(),
+                is_error: true,
+                byte_len: 3,
+                ..Default::default()
+            },
+            NormalizedBlock {
+                kind: "thinking".into(),
+                signature_present: true,
+                byte_len: 0,
+                ..Default::default()
+            },
         ];
         let hashes = vec![None, None, None, None];
-        let meta: serde_json::Value = serde_json::from_str(&build_blocks_meta(&blocks, &hashes)).unwrap();
+        let meta: serde_json::Value =
+            serde_json::from_str(&build_blocks_meta(&blocks, &hashes)).unwrap();
         let arr = meta.as_array().unwrap();
 
         let keyset = |v: &serde_json::Value| {
@@ -416,10 +441,48 @@ mod tests {
             k.sort();
             k
         };
-        assert_eq!(keyset(&arr[0]), vec!["byte_len", "content_hash", "idx", "kind", "signature_present"]);
-        assert_eq!(keyset(&arr[1]), vec!["byte_len", "content_hash", "idx", "kind", "signature_present", "tool_name"]);
-        assert_eq!(keyset(&arr[2]), vec!["byte_len", "content_hash", "idx", "is_error", "kind", "signature_present"]);
-        assert_eq!(keyset(&arr[3]), vec!["byte_len", "content_hash", "idx", "kind", "signature_present"]);
+        assert_eq!(
+            keyset(&arr[0]),
+            vec![
+                "byte_len",
+                "content_hash",
+                "idx",
+                "kind",
+                "signature_present"
+            ]
+        );
+        assert_eq!(
+            keyset(&arr[1]),
+            vec![
+                "byte_len",
+                "content_hash",
+                "idx",
+                "kind",
+                "signature_present",
+                "tool_name"
+            ]
+        );
+        assert_eq!(
+            keyset(&arr[2]),
+            vec![
+                "byte_len",
+                "content_hash",
+                "idx",
+                "is_error",
+                "kind",
+                "signature_present"
+            ]
+        );
+        assert_eq!(
+            keyset(&arr[3]),
+            vec![
+                "byte_len",
+                "content_hash",
+                "idx",
+                "kind",
+                "signature_present"
+            ]
+        );
         assert_eq!(arr[3]["signature_present"], json!(true));
         assert_eq!(arr[2]["is_error"], json!(true));
         assert_eq!(arr[1]["tool_name"], json!("Bash"));
@@ -445,18 +508,25 @@ mod tests {
             blocks: vec![text_block("text", "hello secret body")],
             ..Default::default()
         };
-        let written = write_normalized_turn(&conn, &turn, 0, CapturePolicy::MetadataOnly, None).unwrap();
+        let written =
+            write_normalized_turn(&conn, &turn, 0, CapturePolicy::MetadataOnly, None).unwrap();
         assert!(written);
 
         let row = get_turn(&conn, "t1").unwrap().unwrap();
         assert_eq!(row.source.as_deref(), Some("claude-code"));
         assert!(row.content_blob_hash.is_none());
         // No turn_content rows under metadata-only.
-        assert!(turn_content::list_content_for_turn(&conn, "t1").unwrap().is_empty());
+        assert!(turn_content::list_content_for_turn(&conn, "t1")
+            .unwrap()
+            .is_empty());
         // The body text never reached the DB row.
         assert!(!row.content_blocks_meta.contains("secret body"));
 
-        if let Some(v) = prev { std::env::set_var("PUNKGO_DATA_DIR", v); } else { std::env::remove_var("PUNKGO_DATA_DIR"); }
+        if let Some(v) = prev {
+            std::env::set_var("PUNKGO_DATA_DIR", v);
+        } else {
+            std::env::remove_var("PUNKGO_DATA_DIR");
+        }
     }
 
     #[test]
@@ -476,10 +546,28 @@ mod tests {
             role: "assistant".into(),
             timestamp: "2026-07-01T00:00:00Z".into(),
             blocks: vec![
-                NormalizedBlock { kind: "input_text".into(), role: Some("user".into()), byte_len: 5, content: Some("hi you".into()), ..Default::default() },
-                NormalizedBlock { kind: "output_text".into(), role: Some("assistant".into()), byte_len: 4, content: Some("done".into()), ..Default::default() },
+                NormalizedBlock {
+                    kind: "input_text".into(),
+                    role: Some("user".into()),
+                    byte_len: 5,
+                    content: Some("hi you".into()),
+                    ..Default::default()
+                },
+                NormalizedBlock {
+                    kind: "output_text".into(),
+                    role: Some("assistant".into()),
+                    byte_len: 4,
+                    content: Some("done".into()),
+                    ..Default::default()
+                },
                 // opaque reasoning: no content -> null hash, still a row.
-                NormalizedBlock { kind: "reasoning".into(), signature_present: true, byte_len: 900, content: None, ..Default::default() },
+                NormalizedBlock {
+                    kind: "reasoning".into(),
+                    signature_present: true,
+                    byte_len: 900,
+                    content: None,
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
@@ -488,17 +576,36 @@ mod tests {
 
         let blocks = turn_content::list_content_for_turn(&conn, "ct1").unwrap();
         assert_eq!(blocks.len(), 3);
-        assert!(blocks[0].content_hash.as_deref().unwrap().starts_with("sha256:"));
-        assert!(blocks[1].content_hash.as_deref().unwrap().starts_with("sha256:"));
-        assert!(blocks[2].content_hash.is_none(), "opaque reasoning has null hash");
+        assert!(blocks[0]
+            .content_hash
+            .as_deref()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(blocks[1]
+            .content_hash
+            .as_deref()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(
+            blocks[2].content_hash.is_none(),
+            "opaque reasoning has null hash"
+        );
 
         // Body retrievable from the blob store by its hash.
         let h0 = blocks[0].content_hash.clone().unwrap();
         assert_eq!(blob::resolve(&h0).unwrap().as_deref(), Some("hi you"));
 
         let row = get_turn(&conn, "ct1").unwrap().unwrap();
-        assert!(row.content_blob_hash.as_deref().unwrap().starts_with("sha256:"));
+        assert!(row
+            .content_blob_hash
+            .as_deref()
+            .unwrap()
+            .starts_with("sha256:"));
 
-        if let Some(v) = prev { std::env::set_var("PUNKGO_DATA_DIR", v); } else { std::env::remove_var("PUNKGO_DATA_DIR"); }
+        if let Some(v) = prev {
+            std::env::set_var("PUNKGO_DATA_DIR", v);
+        } else {
+            std::env::remove_var("PUNKGO_DATA_DIR");
+        }
     }
 }

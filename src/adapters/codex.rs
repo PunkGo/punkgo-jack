@@ -300,7 +300,8 @@ pub fn codex_sessions_root() -> Result<PathBuf> {
             return Ok(PathBuf::from(codex_home).join("sessions"));
         }
     }
-    let home = crate::session::home_dir().ok_or_else(|| anyhow!("cannot resolve home directory"))?;
+    let home =
+        crate::session::home_dir().ok_or_else(|| anyhow!("cannot resolve home directory"))?;
     Ok(home.join(".codex").join("sessions"))
 }
 
@@ -620,7 +621,11 @@ fn fold_response_item(
         }
         ResponseItem::Reasoning(r) => {
             report.reasoning_total += 1;
-            if r.encrypted_content.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+            if r.encrypted_content
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+            {
                 report.reasoning_with_encrypted += 1;
             }
             if !r.summary.is_empty() {
@@ -811,7 +816,10 @@ impl<'a> RolloutGrouper<'a> {
     fn flush_assistant(&mut self) {
         if !self.pending_assistant.is_empty() {
             let blocks = std::mem::take(&mut self.pending_assistant);
-            let ts = self.pending_ts.take().unwrap_or_else(|| self.current_ts.clone());
+            let ts = self
+                .pending_ts
+                .take()
+                .unwrap_or_else(|| self.current_ts.clone());
             self.emit("assistant", blocks, ts);
         }
     }
@@ -1096,7 +1104,10 @@ pub fn scan_rollout(path: &Path, redactor: &Redactor) -> Result<ScanResult> {
 /// Derive a session id from a rollout filename
 /// (`rollout-<ts>-<uuid>.jsonl` -> `<uuid>`), falling back to the stem.
 pub fn session_id_from_path(path: &Path) -> String {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("codex-session");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("codex-session");
     // rollout-2026-01-01T00-00-00-<uuid>: the uuid is the last 5 dash groups.
     // Simplest stable derivation: take everything after the timestamp prefix,
     // else the whole stem.
@@ -1156,10 +1167,9 @@ mod tests {
                 !matches!(item, ResponseItem::Unknown),
                 "modeled shape parsed as Unknown: {c}"
             );
-            let round = serde_json::from_value::<ResponseItem>(
-                serde_json::to_value(&item).unwrap(),
-            )
-            .unwrap();
+            let round =
+                serde_json::from_value::<ResponseItem>(serde_json::to_value(&item).unwrap())
+                    .unwrap();
             assert_eq!(item, round, "round-trip mismatch for {c}");
         }
     }
@@ -1262,13 +1272,22 @@ mod tests {
         assert_eq!(report.lines_blank, 1);
         assert_eq!(report.session_meta_count, 1);
         assert_eq!(report.typed_parse_warnings.len(), 0, "no typed warnings");
-        assert_eq!(report.unknown_response_items, 1, "brand_new_shape tolerated");
+        assert_eq!(
+            report.unknown_response_items, 1,
+            "brand_new_shape tolerated"
+        );
 
         // Envelope + response_item type tallies.
         assert_eq!(report.envelope_type_counts.get("response_item"), Some(&9));
         assert_eq!(report.envelope_type_counts.get("event_msg"), Some(&1));
-        assert_eq!(report.response_item_type_counts.get("function_call"), Some(&2));
-        assert_eq!(report.response_item_type_counts.get("function_call_output"), Some(&2));
+        assert_eq!(
+            report.response_item_type_counts.get("function_call"),
+            Some(&2)
+        );
+        assert_eq!(
+            report.response_item_type_counts.get("function_call_output"),
+            Some(&2)
+        );
 
         // Reasoning.
         assert_eq!(report.reasoning_total, 1);
@@ -1292,7 +1311,10 @@ mod tests {
         // output + assistant = 4 items (the boundary user msg discounted).
         assert_eq!(report.user_message_turns, 2);
         assert_eq!(report.max_items_per_turn, 4);
-        assert!(report.avg_items_per_turn() > 1.0, "turns span many items (AD3)");
+        assert!(
+            report.avg_items_per_turn() > 1.0,
+            "turns span many items (AD3)"
+        );
     }
 
     /// Regression (P2a eng review): a line containing raw non-UTF-8 bytes
@@ -1320,7 +1342,10 @@ mod tests {
         let report = dry_run_scan(dir.path()).unwrap();
         assert_eq!(report.files_scanned, 1);
         assert_eq!(report.files_truncated, 0, "must not truncate on non-UTF-8");
-        assert_eq!(report.lines_total, 3, "all 3 lines read, none skipped by truncation");
+        assert_eq!(
+            report.lines_total, 3,
+            "all 3 lines read, none skipped by truncation"
+        );
         // The bad line is an unparseable envelope → counted, not fatal.
         assert_eq!(report.hard_parse_errors, 1);
         // BOTH good lines after/around the bad line were still parsed.
@@ -1330,7 +1355,9 @@ mod tests {
 
     #[test]
     fn is_rollout_file_matches_expected() {
-        assert!(is_rollout_file(Path::new("/x/rollout-2026-01-01T00-00-00-uuid.jsonl")));
+        assert!(is_rollout_file(Path::new(
+            "/x/rollout-2026-01-01T00-00-00-uuid.jsonl"
+        )));
         assert!(!is_rollout_file(Path::new("/x/state_5.sqlite")));
         assert!(!is_rollout_file(Path::new("/x/notes.jsonl")));
         assert!(!is_rollout_file(Path::new("/x/rollout-abc.txt")));
@@ -1370,13 +1397,17 @@ mod tests {
         }
         f.flush().unwrap();
 
-        let scanner =
-            CodexScanner::with_redactor(Redactor::with_env_values(vec!["supersecretvalue123".into()]));
+        let scanner = CodexScanner::with_redactor(Redactor::with_env_values(vec![
+            "supersecretvalue123".into(),
+        ]));
         let result = scanner.scan_file(&path).unwrap();
 
         // Session metadata.
         assert_eq!(result.session.session_id, "sess-abc");
-        assert_eq!(result.session.model_initial.as_deref(), Some("gpt-5.2-codex"));
+        assert_eq!(
+            result.session.model_initial.as_deref(),
+            Some("gpt-5.2-codex")
+        );
         assert_eq!(result.session.git_branch.as_deref(), Some("main"));
         assert_eq!(result.session.source, "codex");
 
@@ -1394,7 +1425,10 @@ mod tests {
         assert_eq!(asst.model.as_deref(), Some("gpt-5.2-codex"));
         // reasoning + tool_call + tool_result + output_text.
         let kinds: Vec<&str> = asst.blocks.iter().map(|b| b.kind.as_str()).collect();
-        assert_eq!(kinds, vec!["reasoning", "tool_call", "tool_result", "output_text"]);
+        assert_eq!(
+            kinds,
+            vec!["reasoning", "tool_call", "tool_result", "output_text"]
+        );
 
         // Reasoning is opaque: no content, size recorded, signature flag set.
         let reasoning = &asst.blocks[0];
@@ -1406,8 +1440,14 @@ mod tests {
         let tool_call = &asst.blocks[1];
         assert_eq!(tool_call.tool_name.as_deref(), Some("shell"));
         let captured = tool_call.content.as_deref().unwrap();
-        assert!(!captured.contains("supersecretvalue123"), "secret leaked: {captured}");
-        assert!(captured.contains("REDACTED"), "expected redaction marker: {captured}");
+        assert!(
+            !captured.contains("supersecretvalue123"),
+            "secret leaked: {captured}"
+        );
+        assert!(
+            captured.contains("REDACTED"),
+            "expected redaction marker: {captured}"
+        );
 
         assert_eq!(asst.blocks[2].content.as_deref(), Some("ok done"));
         assert_eq!(asst.blocks[3].content.as_deref(), Some("finished"));
