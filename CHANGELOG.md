@@ -12,7 +12,9 @@ The format is loosely based on Keep a Changelog.
   sessions by parsing its rollout files (`$CODEX_HOME/sessions/**/rollout-*.jsonl`).
   `punkgo-jack reindex --source codex` backfills every local session; `setup
   codex` installs hooks (`SessionStart`, `Stop`) that rescan the active session
-  for freshness. Verified across 410 real rollouts.
+  for freshness. Codex runs only trusted hooks, so after setup a one-time
+  `/hooks` → trust step inside Codex is required before live recording starts.
+  Verified across 410 real rollouts.
   - **Content capture** — a Codex turn's input/output/tool text is stored in the
     content-addressed blob store (SHA-256, deduped) and referenced by hash;
     metadata + hashes live in jack.db, bodies in the blob store.

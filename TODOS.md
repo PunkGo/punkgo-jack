@@ -2,6 +2,18 @@
 
 Deferred work, most recent first.
 
+## Found in v0.7.0 real-machine dogfood (2026-07-02)
+
+- **Claude Code blob externalization is un-redacted** — the pre-existing hook
+  ingest path (`blob::externalize_tool_input`, since v0.6.x) writes large
+  `tool_input`/`tool_response` fields to the local blob store verbatim; the
+  v0.7.0 `Redactor` guards only the Codex capture path. A secret inside a CC
+  tool-call body therefore lands in the local blob store in cleartext (blobs
+  never leave the machine and kernel events carry only hashes, but secret-zero
+  says scrub it). Fix for v0.7.1: route CC externalization through
+  `redact::Redactor` before hashing/storing (hash then refers to the stored,
+  redacted content; pre-existing blobs unaffected). Not a v0.7.0 regression.
+
 ## Deferred from v0.7.0 CEO review (2026-07-01)
 
 - **E2 · Unified cross-agent session view** — `report`/MCP renders a session

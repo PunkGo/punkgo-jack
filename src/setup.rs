@@ -161,7 +161,17 @@ pub fn run_setup(tool: &str) -> Result<()> {
 
     // Signal collection — help us understand who uses PunkGo and why.
     eprintln!();
-    eprintln!("Setup complete for {tool}. Your next session is being recorded.");
+    if tool == "codex" {
+        // Codex runs only TRUSTED hooks (trust is recorded against the hook's
+        // hash; untrusted hooks are silently skipped) — so "your next session
+        // is being recorded" would be false until the user trusts ours once.
+        eprintln!("Setup complete for codex. One step left — Codex only runs trusted hooks:");
+        eprintln!("  run `codex`, type `/hooks`, and trust the punkgo-jack hooks (one-time).");
+        eprintln!("  Recording starts with the next session after that.");
+        eprintln!("  Backfill every past session anytime: punkgo-jack reindex --source codex");
+    } else {
+        eprintln!("Setup complete for {tool}. Your next session is being recorded.");
+    }
     eprintln!();
     eprintln!("  Quick question — what made you try PunkGo?");
     eprintln!("  → 30 sec survey: https://punkgo.ai/why");

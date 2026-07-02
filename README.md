@@ -151,7 +151,9 @@ as `metadata` (never captures bodies on a typo).
 
 Codex I/O is recorded by tailing its rollout files
 (`$CODEX_HOME/sessions/**/rollout-*.jsonl`); `setup codex` additionally installs
-hooks that rescan the active session for freshness. Backfill anytime with
+hooks that rescan the active session for freshness. Codex runs only trusted
+hooks: after setup, open `codex`, type `/hooks`, and trust the punkgo-jack
+hooks once — live recording starts with the next session. Backfill anytime with
 `punkgo-jack reindex --source codex`.
 
 <details>
