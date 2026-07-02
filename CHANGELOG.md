@@ -29,8 +29,9 @@ The format is loosely based on Keep a Changelog.
 - **jack.db v2 schema**: `turn_content` table (per content block) + `turns.source`.
   Forward-only migration; legacy DBs upgrade in place.
 - **MCP surface**: `turn_detail` returns captured content (bodies, when present);
-  `session_list` filters by `source`; `hidden_tokens` reports Codex reasoning
-  analytics (block count + opaque byte size).
+  the existing `session_list` `source` filter now also selects `codex` sessions;
+  `hidden_tokens` reports Codex reasoning analytics (block count + opaque byte
+  size).
 - **Claude Code hooks**: 4 new human-in-the-loop events (`PermissionRequest`,
   `Elicitation`, `ElicitationResult`, `MessageDisplay`) — 15 → 19 hooks — plus
   payload enrichment (`effort`, `prompt_id`, `permission_mode`, `agent_id`,
